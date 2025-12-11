@@ -1,0 +1,631 @@
+"""
+Abstract Logger interface for Maxim AI and LangSmith
+"""
+
+# Abstract class imports
+from abc import ABC, abstractmethod
+from typing import Optional, Dict, Any
+from .message import Message
+from .content_blocks import ToolUseBlock, ToolResultBlock
+
+# LangSmith imports
+import os
+import sys
+import time
+import json
+from typing import Optional, Dict, Any
+from uuid import uuid4
+
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider, Span
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
+
+class Logger(ABC):
+    """Abstract base class for logging implementations"""
+    
+    @abstractmethod
+    def log_llm_response(
+        self, 
+        message: Message, 
+        iteration: int, 
+        model: Optional[str] = None, 
+        provider: Optional[str] = None,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None
+    ) -> None:
+        """
+        Log LLM response to the tracing system.
+        
+        Args:
+            message: The message containing the LLM response
+            iteration: The iteration number of this response
+            model: Optional model name
+            provider: Optional provider name
+            start_time: Start time in nanoseconds
+            end_time: End time in nanoseconds
+        """
+        pass
+    
+    @abstractmethod
+    def log_tool_response(
+        self, 
+        tool_use: ToolUseBlock, 
+        result: ToolResultBlock,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None
+    ) -> None:
+        """
+        Log tool call and result to the tracing system.
+        
+        Args:
+            tool_use: The tool use block containing tool call information
+            result: The tool result block containing the result
+            start_time: Start time in nanoseconds
+            end_time: End time in nanoseconds
+        """
+        pass
+    
+    @abstractmethod
+    def start_trace(self, name: str, user_prompt: str) -> Optional[str]:
+        """
+        Start a new trace.
+        
+        Args:
+            name: Name of the trace
+            user_prompt: The user's initial prompt
+            
+        Returns:
+            Trace ID if available, None otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def end_trace(self, output: str, metadata: Dict[str, Any]) -> None:
+        """
+        End the current trace.
+        
+        Args:
+            output: The final output of the trace
+            metadata: Additional metadata to attach to the trace
+        """
+        pass
+    
+    @abstractmethod
+    def log_metadata(self, metadata: Dict[str, Any]) -> None:
+        """
+        Log metadata to the current trace.
+        
+        Args:
+            metadata: Dictionary of metadata to log
+        """
+        pass
+    
+    @abstractmethod
+    def flush(self, timeout_millis: int = 5000) -> None:
+        """
+        Flush pending traces to the tracing system.
+        
+        Args:
+            timeout_millis: Maximum time to wait for flush (milliseconds)
+        """
+        pass
+    
+    @abstractmethod
+    def shutdown(self) -> None:
+        """Shutdown the logger and flush any pending traces"""
+        pass
+
+
+class LangSmithLogger(Logger):
+    """
+    Implementation of Logger using OpenTelemetry for LangSmith.
+    """
+    
+    def __init__(self, project_name: str = "default"):
+        self.tracer = self._setup_tracing(project_name)
+        self.root_span: Optional[Span] = None
+        self.session_id: str = "unknown"
+        self.system_prompt: str = ""
+
+    def _setup_tracing(self, project_name: str):
+        """Initialize OTel provider and exporter."""
+        # Environment variables should already be loaded by the calling module
+        langsmith_endpoint = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
+        langsmith_api_key = os.getenv("LANGSMITH_API_KEY")
+        
+        resource = Resource(attributes={
+            "service.name": "cal-agent",
+            "service.version": "1.0.0",
+        })
+
+        if not langsmith_api_key:
+            raise EnvironmentError("LANGSMITH_API_KEY not set in environment")
+        
+        otlp_exporter = OTLPSpanExporter(
+            endpoint=f"{langsmith_endpoint}/otel/v1/traces",
+            headers={
+                "x-api-key": langsmith_api_key,
+                "langsmith-project": project_name
+            },
+            timeout=30,
+        )
+        
+        provider = TracerProvider(resource=resource)
+        processor = BatchSpanProcessor(otlp_exporter)
+        provider.add_span_processor(processor)
+        trace.set_tracer_provider(provider)
+        self.provider = provider
+            
+        return trace.get_tracer(__name__, "1.0.0")
+
+    def start_trace(self, name: str, user_prompt: str) -> Optional[str]:
+        # End any existing trace if start is called again improperly
+        if self.root_span:
+            print("Warning: start_trace called with existing active span. Ending previous span before starting new one.", file=sys.stderr)
+            self.root_span.end()
+
+        # Start the root span (Agent Run)
+        self.root_span = self.tracer.start_span(name)
+        
+        # Prepare input value
+        input_value = f"User Prompt: {user_prompt}"
+        if self.system_prompt:
+             input_value = f"System Prompt: {self.system_prompt}\n\n{input_value}"
+             self.root_span.set_attribute("langsmith.metadata.system_prompt", self.system_prompt)
+
+        self.root_span.set_attribute("input.value", input_value)
+        
+        if self.session_id:
+            self.root_span.set_attribute("session.id", self.session_id)
+            self.root_span.set_attribute("langsmith.metadata.session_id", self.session_id)
+
+        return str(self.root_span.get_span_context().trace_id)
+
+    def log_metadata(self, metadata: Dict[str, Any]) -> None:
+        """Store metadata to be used in current or future spans."""
+        if "session_id" in metadata:
+            self.session_id = metadata["session_id"]
+        if "system_prompt" in metadata:
+            self.system_prompt = metadata["system_prompt"]
+            
+        if self.root_span and self.root_span.is_recording():
+            for key, value in metadata.items():
+                self.root_span.set_attribute(f"langsmith.metadata.{key}", str(value))
+
+    def log_llm_response(
+        self, 
+        message: Message, 
+        iteration: int, 
+        model: Optional[str] = None, 
+        provider: Optional[str] = None,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None
+    ) -> None:
+        if not self.root_span:
+            return
+
+        ctx = trace.set_span_in_context(self.root_span)
+        
+        # Start span with explicit start_time (manual management for explicit end_time)
+        span = self.tracer.start_span(
+            "llm.generate_content", 
+            context=ctx,
+            start_time=start_time
+        )
+        
+        try:
+            span.set_attribute("langsmith.span.kind", "LLM")
+            span.set_attribute("gen_ai.system", provider or "unknown")
+            span.set_attribute("gen_ai.request.model", model or "unknown")
+            span.set_attribute("session.id", self.session_id)
+            span.set_attribute("langsmith.metadata.iteration", iteration)
+
+            # Format content
+            content_parts = []
+            if isinstance(message.content, list):
+                for block in message.content:
+                    if hasattr(block, 'text'):
+                        content_parts.append(block.text)
+                    elif isinstance(block, ToolUseBlock):
+                        content_parts.append(f"[Tool Use: {block.name}({json.dumps(block.input)})]")
+            else:
+                content_parts.append(str(message.content))
+            
+            content_text = " ".join(content_parts)
+            span.set_attribute("gen_ai.completion.0.role", message.role.value)
+            span.set_attribute("gen_ai.completion.0.content", content_text)
+
+            # Token usage
+            usage = message.usage or {}
+            prompt_tokens = usage.get('prompt_tokens', 0)
+            completion_tokens = usage.get('completion_tokens', 0)
+            total_tokens = usage.get('total_tokens', prompt_tokens + completion_tokens)
+            
+            span.set_attribute("gen_ai.usage.prompt_tokens", prompt_tokens)
+            span.set_attribute("gen_ai.usage.completion_tokens", completion_tokens)
+            span.set_attribute("gen_ai.usage.total_tokens", total_tokens)
+        finally:
+            # End span with explicit end_time
+            span.end(end_time=end_time)
+
+    def log_tool_response(
+        self, 
+        tool_use: ToolUseBlock, 
+        result: ToolResultBlock,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None
+    ) -> None:
+        if not self.root_span:
+            return
+
+        ctx = trace.set_span_in_context(self.root_span)
+        
+        # Start span with explicit start_time (manual management for explicit end_time)
+        span = self.tracer.start_span(
+            "tool.execute", 
+            context=ctx,
+            start_time=start_time
+        )
+        
+        try:
+            span.set_attribute("langsmith.span.kind", "TOOL")
+            span.set_attribute("session.id", self.session_id)
+            
+            # Input
+            input_str = json.dumps(tool_use.input) if isinstance(tool_use.input, dict) else str(tool_use.input)
+            span.set_attribute("input.value", input_str)
+            
+            # Output
+            output_content = result.content if isinstance(result.content, str) else str(result.content)
+            span.set_attribute("output.value", output_content)
+            
+            if result.is_error:
+                span.record_exception(Exception(result.content))
+                span.set_status(trace.Status(trace.StatusCode.ERROR))
+            
+            if result.metadata:
+                span.set_attribute("langsmith.metadata", json.dumps(result.metadata))
+        finally:
+            # End span with explicit end_time
+            span.end(end_time=end_time)
+
+    def end_trace(self, output: str, metadata: Dict[str, Any]) -> None:
+        if not self.root_span:
+            print("Warning: end_trace called with no active span. Was start_trace called?", file=sys.stderr)
+            return
+
+        self.root_span.set_attribute("output.value", output)
+        
+        for k, v in metadata.items():
+            if k == "status":
+                self.root_span.set_attribute("workflow.status", v)
+            elif k == "total_iterations":
+                self.root_span.set_attribute("total_iterations", v)
+            else:
+                self.root_span.set_attribute(f"langsmith.metadata.{k}", str(v))
+
+        self.root_span.end()
+        self.root_span = None
+
+    def flush(self, timeout_millis: int = 5000) -> None:
+        if hasattr(self, 'provider'):
+            self.provider.force_flush(timeout_millis=timeout_millis)
+
+    def shutdown(self) -> None:
+        if hasattr(self, 'provider'):
+            self.provider.shutdown()
+
+
+class MaximLogger(Logger):
+    """
+    Implementation of Logger for Maxim AI using the updated SDK v0.1.3+.
+    """
+    
+    def __init__(self, session_id: Optional[str] = None):
+        self.maxim_client = None  # Keep reference to client for proper cleanup
+        self.logger_instance = self._setup_maxim()
+        self.root_trace = None
+        self.maxim_session = None  # Maxim session object for proper session linking
+        self.session_id: str = session_id or "unknown"
+        self.system_prompt: str = ""
+        self.user_prompt: str = ""
+        self._is_shutdown = False  # Track shutdown state to avoid duplicate cleanup
+        
+    def _setup_maxim(self):
+        """Initialize Maxim client. Returns None if initialization fails."""
+        maxim_api_key = os.getenv("MAXIM_API_KEY")
+        maxim_log_repo_id = os.getenv("MAXIM_LOG_REPO_ID")
+        
+        if not maxim_api_key:
+            print("MaximLogger disabled: MAXIM_API_KEY not set in environment.", file=sys.stderr)
+            return None
+        if not maxim_log_repo_id:
+            print("MaximLogger disabled: MAXIM_LOG_REPO_ID not set in environment.", file=sys.stderr)
+            return None
+            
+        try:
+            from maxim import Maxim
+            from maxim.logger import LoggerConfigDict
+            
+            self.maxim_client = Maxim({"api_key": maxim_api_key})
+            return self.maxim_client.logger(LoggerConfigDict(id=maxim_log_repo_id))
+            
+        except ImportError:
+            print("MaximLogger disabled: 'maxim-py' package not found. Please `pip install maxim-py`.", file=sys.stderr)
+            return None
+        except Exception as e:
+            error_msg = str(e)
+            if "Invalid log repository" in error_msg:
+                print("MaximLogger disabled: MAXIM_LOG_REPO_ID appears invalid. Check the Maxim dashboard for the correct log repository ID. Note this is different from the repository name.", file=sys.stderr)
+            else:
+                print(f"MaximLogger disabled: Failed to initialize - {e}", file=sys.stderr)
+            return None
+
+    def start_trace(self, name: str, user_prompt: str) -> Optional[str]:
+        if not self.logger_instance:
+            return None
+        
+        # Check for existing trace
+        if self.root_trace:
+            print("Warning: start_trace called with existing active trace. Ending previous trace before starting new one.", file=sys.stderr)
+            try:
+                self.root_trace.end()
+            except Exception as e:
+                print(f"Warning: Failed to end previous Maxim trace: {e}", file=sys.stderr)
+        
+        try:
+            # Store user prompt for logging
+            self.user_prompt = user_prompt
+            
+            # Create or get Maxim session for proper session linking in UI
+            if not self.maxim_session:
+                self.maxim_session = self.logger_instance.session({
+                    "id": self.session_id,
+                    "name": f"Session-{self.session_id}"
+                })
+            
+            trace_id = str(uuid4())
+            # Create trace within the session context (not directly on logger)
+            self.root_trace = self.maxim_session.trace({
+                "id": trace_id,
+                "name": name,
+                "tags": {
+                    "service": "cal-agent"
+                }
+            })
+            
+            input_value = f"User Prompt: {user_prompt}"
+            if self.system_prompt:
+                 input_value = f"{input_value}\n\nSystem Prompt: {self.system_prompt}"
+            
+            self.root_trace.set_input(input_value)
+            return trace_id
+            
+        except Exception as e:
+            print(f"Warning: Failed to start Maxim trace: {e}", file=sys.stderr)
+            return None
+
+    def log_llm_response(
+        self, 
+        message: Message, 
+        iteration: int, 
+        model: Optional[str] = None, 
+        provider: Optional[str] = None,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None
+    ) -> None:
+        if not self.root_trace:
+            return
+
+        try:
+            # Create a span for the LLM interaction
+            span_id = str(uuid4())
+            span = self.root_trace.span({
+                "id": span_id,
+                "name": f"llm_generate_iter_{iteration}",
+                "tags": {
+                    "iteration": iteration,
+                    "model": model or "unknown",
+                    "session_id": self.session_id
+                }
+            })
+
+            # Prepare usage data
+            usage = message.usage or {}
+            prompt_tokens = usage.get('prompt_tokens', 0)
+            completion_tokens = usage.get('completion_tokens', 0)
+            tokens = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": usage.get('total_tokens', prompt_tokens + completion_tokens)
+            }
+            
+            # Setup Generation Log - user prompt first, then system prompt
+            messages = [
+                {"role": "user", "content": self.user_prompt or "No user prompt"},
+                {"role": "system", "content": self.system_prompt or "No system prompt"},
+            ]
+            generation = span.generation({
+                "id": str(uuid4()),
+                "name": "llm_inference",
+                "provider": provider or "unknown",
+                "model": model or "unknown",
+                "messages": messages, 
+                "model_parameters": {}, 
+            })
+            
+            # Log the result
+            content_parts = []
+            if isinstance(message.content, list):
+                for block in message.content:
+                    if hasattr(block, 'text'):
+                        content_parts.append(block.text)
+                    elif isinstance(block, ToolUseBlock):
+                        content_parts.append(f"[Tool Use: {block.name}({json.dumps(block.input)})]")
+            else:
+                content_parts.append(str(message.content))
+            content_text = " ".join(content_parts)
+            created_time = int(end_time / 1e9) if end_time else int(time.time())
+            
+            generation.result({
+                "id": str(uuid4()),
+                "object": "chat.completion",
+                "created": created_time,
+                "model": model or "unknown",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": message.role.value,
+                        "content": content_text
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": tokens
+            })
+            
+            span.end()
+            
+        except Exception as e:
+            print(f"Warning: Failed to log LLM response to Maxim: {e}", file=sys.stderr)
+
+    def log_tool_response(
+        self, 
+        tool_use: ToolUseBlock, 
+        result: ToolResultBlock,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None
+    ) -> None:
+        if not self.root_trace:
+            return
+            
+        try:
+            # Create a span for the tool execution
+            span_id = str(uuid4())
+            span = self.root_trace.span({
+                "id": span_id,
+                "name": f"tool_execute_{tool_use.name}",
+                "tags": {
+                    "tool_name": tool_use.name,
+                    "session_id": self.session_id,
+                    "is_error": result.is_error
+                }
+            })
+            
+            input_str = json.dumps(tool_use.input) if isinstance(tool_use.input, dict) else str(tool_use.input)
+            span.add_tag("input", input_str)
+            
+            output_content = result.content if isinstance(result.content, str) else str(result.content)
+            span.add_tag("output", output_content)
+
+            if result.metadata:
+                for k, v in result.metadata.items():
+                    span.add_tag(k, str(v))
+            
+            span.end()
+            
+        except Exception as e:
+            print(f"Warning: Failed to log Tool response to Maxim: {e}", file=sys.stderr)
+
+    def end_trace(self, output: str, metadata: Dict[str, Any]) -> None:
+        if not self.root_trace:
+            print("Warning: end_trace called with no active trace. Was start_trace called?", file=sys.stderr)
+            return
+
+        try:
+            self.root_trace.set_output(output)
+            if metadata:
+                for k, v in metadata.items():
+                    self.root_trace.add_tag(k, str(v))
+            
+            # End the trace - this may trigger async flushing
+            self.root_trace.end()
+        except Exception as e:
+            print(f"Warning: Error ending Maxim trace: {e}", file=sys.stderr)
+        finally:
+            self.root_trace = None
+
+    def log_metadata(self, metadata: Dict[str, Any]) -> None:
+        if "session_id" in metadata:
+            self.session_id = metadata["session_id"]
+        if "system_prompt" in metadata:
+            self.system_prompt = metadata["system_prompt"]
+            
+        if self.root_trace:
+            for k, v in metadata.items():
+                self.root_trace.add_tag(k, str(v))
+
+    def flush(self, timeout_millis: int = 5000) -> None:
+        # Skip if already shutdown
+        if self._is_shutdown:
+            return
+            
+        # Maxim SDK handles flushing internally usually, or via end()
+        # If there's an active trace, ensure it's ended before flushing
+        if self.root_trace:
+            try:
+                self.root_trace.end()
+            except Exception as e:
+                if "cannot schedule new futures after shutdown" not in str(e):
+                    print(f"Warning: Error ending trace during flush: {e}", file=sys.stderr)
+            finally:
+                self.root_trace = None
+        
+        # Note: Don't end session on flush - session persists across multiple traces/requests
+        
+        # Use the logger's flush method if available
+        if self.logger_instance:
+            try:
+                if hasattr(self.logger_instance, 'flush'):
+                    self.logger_instance.flush()
+                else:
+                    # Fallback: give SDK time to process
+                    time.sleep(0.1)
+            except Exception as e:
+                if "cannot schedule new futures after shutdown" not in str(e):
+                    print(f"Warning: Error flushing Maxim logger: {e}", file=sys.stderr)
+
+    def shutdown(self) -> None:
+        # Prevent duplicate shutdown calls
+        if self._is_shutdown:
+            return
+        self._is_shutdown = True
+        
+        # Ensure trace is ended before shutdown
+        if self.root_trace:
+            try:
+                self.root_trace.end()
+            except Exception as e:
+                if "cannot schedule new futures after shutdown" not in str(e):
+                    print(f"Warning: Error ending trace during shutdown: {e}", file=sys.stderr)
+            finally:
+                self.root_trace = None
+        
+        # End the Maxim session
+        if self.maxim_session:
+            try:
+                self.maxim_session.end()
+            except Exception as e:
+                if "cannot schedule new futures after shutdown" not in str(e):
+                    print(f"Warning: Error ending Maxim session: {e}", file=sys.stderr)
+            finally:
+                self.maxim_session = None
+        
+        # Properly cleanup the Maxim client
+        if self.maxim_client:
+            try:
+                # Try to cleanup the client - this ensures worker threads are properly terminated
+                if hasattr(self.maxim_client, 'cleanup'):
+                    self.maxim_client.cleanup()
+                elif hasattr(self.maxim_client, 'close'):
+                    self.maxim_client.close()
+                elif hasattr(self.maxim_client, 'shutdown'):
+                    self.maxim_client.shutdown()
+            except Exception as e:
+                # Silently ignore shutdown errors - they're expected during process exit
+                if "cannot schedule new futures after shutdown" not in str(e):
+                    print(f"Warning: Error cleaning up Maxim client: {e}", file=sys.stderr)
+            finally:
+                self.maxim_client = None
+                self.logger_instance = None

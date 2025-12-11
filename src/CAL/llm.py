@@ -1,0 +1,218 @@
+"""
+LLM classes for CAL
+"""
+
+from abc import ABC, abstractmethod # This is a python import for abstract base class (abc)
+from typing import List, Optional
+from .message import Message, MessageRole
+from .content_blocks import TextBlock, ToolUseBlock
+import os
+import sys
+from google import genai
+from google.genai import types
+from google.genai.types import HttpOptions
+from dotenv import load_dotenv
+from .tool import Tool
+
+load_dotenv()
+
+#This is the abstract base class for LLMs, it can not be instantiated directly, but must be subclassed
+# Here's a good link on it: https://www.geeksforgeeks.org/python/abstract-classes-in-python/
+class LLM(ABC):
+    """Abstract base class for LLMs"""
+    
+    def __init__(self, max_tokens: int, name: str, provider: str):
+        """
+        Initialize the LLM.
+        
+        Args:
+            max_tokens: Maximum number of tokens for generation
+            name: Name of the LLM
+            provider: Provider of the LLM
+        """
+        self.max_tokens = max_tokens
+        self.name = name
+        self.provider = provider
+    @abstractmethod
+    def generate_content(self, system_prompt: str, conversation_history: List[Message], tools: Optional[List[Tool]] = None) -> Message:
+        """
+        Generate content based on conversation history.
+        
+        Args:
+            system_prompt: System prompt for the LLM
+            conversation_history: List of messages in the conversation
+            tools: Optional list of tools available to the LLM
+            
+        Returns:
+            Generated message
+        """
+        pass
+
+
+class AnthropicVertexLLM(LLM):
+    """Anthropic Vertex LLM implementation (stub)"""
+    
+    def __init__(self, api_key: str, model: str, max_tokens: int):
+        """
+        Initialize the Anthropic Vertex LLM.
+        
+        Args:
+            api_key: API key for authentication
+            model: Model name to use
+            max_tokens: Maximum number of tokens for generation
+        """
+        super().__init__(max_tokens, name=model, provider="Anthropic")
+        if not api_key:
+            self.api_key = os.getenv("GEMINI_API_KEY")
+        else:
+            self.api_key = api_key
+
+        self.model = model
+    
+    def generate_content(self, system_prompt: str, conversation_history: List[Message], tools: Optional[List[Tool]] = None) -> Message:
+        """
+        Generate content based on conversation history (stub implementation).
+        
+        Args:
+            system_prompt: System prompt for the LLM
+            conversation_history: List of messages in the conversation
+            tools: Optional list of tools available to the LLM
+            
+        Returns:
+            Generated message with stub content "Hi"
+        """
+        # Stub implementation - returns a simple message
+        return Message(
+            role=MessageRole.ASSISTANT,
+            content=[TextBlock(text="Hi")]
+        )
+    
+class GeminiLLM(LLM):
+    """Gemini LLM implementation"""
+    
+    def __init__(self, api_key: str, model: str, max_tokens: int):
+        """
+        Initialize the Gemini Vertex LLM.
+        
+        Args:
+            api_key: API key for authentication
+            model: Model name to use
+            max_tokens: Maximum number of tokens for generation
+        """
+        super().__init__(max_tokens, name=model, provider="Gemini")
+        if not api_key:
+            self.api_key = os.getenv("GEMINI_API_KEY")
+        else:
+            self.api_key = api_key
+
+        self.model = model
+        # Initialize client once to avoid duplicate API key warnings
+        self.client = genai.Client(http_options=HttpOptions(api_version="v1alpha"))
+    
+    def generate_content(self, system_prompt: str, conversation_history: List[Message], tools: Optional[List[Tool]] = None) -> Message:
+        """
+        Generate content based on conversation history.
+        
+        Args:
+            system_prompt: System prompt for the LLM
+            conversation_history: List of messages in the conversation
+            tools: Optional list of tools available to the LLM
+            
+        Returns:
+            Generated message from Gemini API
+        """
+        # Format the conversation history for Gemini API
+        formatted_history = []
+        for message in conversation_history:
+            parts = []
+            if isinstance(message.content, str):
+                parts.append(TextBlock(message.content).gemini_content_form())
+            else:
+                for block in message.content:
+                    gemini_block = block.gemini_content_form()
+                    parts.extend(gemini_block if isinstance(gemini_block, list) else [gemini_block])
+            
+            role = message.role.value
+            if role == "tool response":
+                role = "user"
+            elif role == "assistant":
+                role = "model"
+            
+            # Merge with previous message if role is the same
+            if formatted_history and formatted_history[-1]['role'] == role:
+                formatted_history[-1]['parts'].extend(parts)
+            else:
+                formatted_history.append({'role': role, 'parts': parts})
+
+        # Prepare config parameters
+        config_params = {
+            'system_instruction': system_prompt,
+        }
+        
+        # Add tools if provided (convert to Gemini format)
+        if tools:
+            gemini_tools = []
+            for tool in tools:
+                gemini_tools.append(tool.gemini_input_form())
+            config_params['tools'] = gemini_tools
+
+        # Generate a response from the Gemini model using the formatted conversation
+        if os.getenv("DEBUG_LLM_RESPONSE") == "true":
+            print(f"[LLM] Requesting model: {self.model}", file=sys.stderr)
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=formatted_history,
+            config=types.GenerateContentConfig(**config_params)
+        )
+        if os.getenv("DEBUG_LLM_RESPONSE") == "true" and hasattr(response, 'model_version'):
+            print(f"[LLM] Response model_version: {response.model_version}", file=sys.stderr)
+
+        content_blocks = []
+        if response.candidates and len(response.candidates) > 0:
+            candidate = response.candidates[0]
+            if candidate.content and candidate.content.parts:
+                for part in candidate.content.parts:
+                    if hasattr(part, 'text') and part.text:
+                        content_blocks.append(TextBlock(text=part.text))
+                    elif hasattr(part, 'function_call'):
+                        fc = part.function_call
+                        content_blocks.append(
+                            ToolUseBlock(
+                                id=fc.id if hasattr(fc, 'id') else fc.name,
+                                name=fc.name,
+                                input=dict(fc.args),
+                                thought=getattr(part, 'thought', None),
+                                thought_signature=getattr(part, 'thought_signature', None)
+                            )
+                        )
+        
+        # Extract token usage from response
+        usage = {}
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            usage = {
+                'prompt_tokens': getattr(response.usage_metadata, 'prompt_token_count', 0) or 0,
+                'completion_tokens': getattr(response.usage_metadata, 'candidates_token_count', 0) or 0,
+                'total_tokens': getattr(response.usage_metadata, 'total_token_count', 0) or 0
+            }
+        
+        # Extract finish reason
+        finish_reason = None
+        if response.candidates and len(response.candidates) > 0:
+            candidate = response.candidates[0]
+            if hasattr(candidate, 'finish_reason'):
+                finish_reason = str(candidate.finish_reason)
+        
+        # Log usage metadata (debug info)
+        if os.getenv("DEBUG_LLM_RESPONSE") == "true":
+            print(f"Full response: {response}", file=sys.stderr)
+            print(f"Usage metadata: {usage}", file=sys.stderr)
+            print(f"Finish reason: {finish_reason}", file=sys.stderr)
+        
+        message = Message(
+            role=MessageRole.ASSISTANT,
+            content=content_blocks,
+            usage=usage,
+            metadata={'finish_reason': finish_reason} if finish_reason else {},
+        )
+        
+        return message
