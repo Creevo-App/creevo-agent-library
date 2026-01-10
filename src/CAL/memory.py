@@ -38,6 +38,11 @@ class Memory(ABC):
         pass
 
     @abstractmethod
+    def compress(self):
+        """Compress memory to reduce size."""
+        pass
+
+    @abstractmethod
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the memory into a dictionary."""
         pass
@@ -77,9 +82,9 @@ class FullCompressionMemory(Memory):
         """Add a message to memory. Compress when capacity exceeded."""
         self._messages.append(message)
         if len(self._messages) > self.max_items:
-            self._compress()
+            self.compress()
 
-    def _compress(self):
+    def compress(self):
         """
         Compress memory: keep initial user message, summarize middle,
         keep most recent N messages.
