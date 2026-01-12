@@ -8,6 +8,7 @@ from .llm import LLM, AnthropicVertexLLM, GeminiLLM
 from .tool import Tool, tool, StopTool
 from .message import Message, MessageRole
 from .memory import Memory, FullCompressionMemory
+from .compression import CompressionConfig, CompressionArchiver
 from .content_blocks import (
     ContentBlock,
     TextBlock,
@@ -35,4 +36,6 @@ __all__ = [
     'ToolResultBlock',
     'Memory',
     'FullCompressionMemory',
+    'CompressionConfig',
+    'CompressionArchiver',
 ]
