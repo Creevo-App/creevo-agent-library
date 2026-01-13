@@ -149,18 +149,23 @@ class FullCompressionMemory(Memory):
 
     def _estimate_message_tokens(self, message: Message) -> int:
         """
-        Estimate the token count for a message.
+        Get the token count for a message, using actual usage data when available.
         
         Priority order:
         1. Use actual token count from message.usage if available (most accurate)
+           - Assistant messages from LLM responses have this data
         2. Use tiktoken for text content if available (accurate)
         3. Fall back to character-based estimation (~4 chars per token)
-        """
-        token_count = 0
         
+        Note: Only assistant messages (LLM responses) have usage data.
+        User messages and tool responses are estimated.
+        """
         # If message has usage metadata with token count, use that (most accurate)
+        # This applies to assistant messages from LLM responses
         if message.usage and 'total_tokens' in message.usage:
             return message.usage['total_tokens']
+        
+        token_count = 0
         
         # Try to use tiktoken if available
         encoding = self._get_encoding()
