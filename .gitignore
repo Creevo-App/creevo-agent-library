@@ -128,5 +128,3 @@ dmypy.json
 *.swp
 *.swo
 *~
-
-.cursor/
