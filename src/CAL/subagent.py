@@ -94,11 +94,12 @@ class SubAgentTool(Tool):
         )
 
         # Run the sub-agent
-        result_message = await sub_agent.run_async(task)
-
-        # End the child logger's wrapper span
-        if child_logger:
-            child_logger.end_child()
+        try:
+            result_message = await sub_agent.run_async(task)
+        finally:
+            # End the child logger's wrapper span
+            if child_logger:
+                child_logger.end_child()
 
         # Pass through the content directly (ToolResultBlock accepts str or List[ContentBlock])
         content = result_message.content
