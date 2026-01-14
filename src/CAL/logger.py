@@ -339,11 +339,11 @@ class LangSmithLogger(Logger):
             self.provider.shutdown()
 
     def create_child_logger(self, name: str) -> "LangSmithLogger":
-        """Stub: LangSmithLogger doesn't support nested spans, returns self."""
+        """Stub: TODO: come back to this."""
         return self
 
     def end_child(self) -> None:
-        """Stub: No-op for LangSmithLogger."""
+        """Stub: TODO: come back to this."""
         pass
 
 
@@ -353,21 +353,19 @@ class MaximLogger(Logger):
     """
     
     def __init__(self, session_id: Optional[str] = None, _parent_span=None):
-        self._parent_span = _parent_span  # For child loggers: the wrapper span to nest under
+        self._parent_span = _parent_span 
         self._is_child = _parent_span is not None
         
         if self._is_child:
-            # Child logger: skip setup, inherit from parent context
             self.maxim_client = None
             self.logger_instance = None
             self.root_trace = None
             self.maxim_session = None
         else:
-            # Normal logger: full initialization
-            self.maxim_client = None  # Keep reference to client for proper cleanup
+            self.maxim_client = None  
             self.logger_instance = self._setup_maxim()
             self.root_trace = None
-            self.maxim_session = None  # Maxim session object for proper session linking
+            self.maxim_session = None  
         
         self.session_id: str = session_id or "unknown"
         self.system_prompt: str = ""
@@ -406,12 +404,10 @@ class MaximLogger(Logger):
 
     def create_child_logger(self, name: str) -> "MaximLogger":
         """Create a child logger that logs under a nested sub-agent span."""
-        # Determine the span parent: use _parent_span if child, otherwise root_trace
         span_parent = self._parent_span if self._is_child else self.root_trace
         
         if not span_parent:
-            # No active trace/span - return a no-op child logger
-            return MaximLogger(session_id=self.session_id, _parent_span=None)
+            raise RuntimeError("Cannot create child logger: no active trace or parent span")
         
         # Create wrapper span for sub-agent execution
         wrapper_span = span_parent.span({
@@ -435,9 +431,11 @@ class MaximLogger(Logger):
         if self._is_child and self._parent_span:
             self._parent_span.end()
             self._parent_span = None
+        else:
+            raise RuntimeError("Cannot end child logger: no active parent span, this was called improperly.")
 
     def start_trace(self, name: str, user_prompt: str) -> Optional[str]:
-        # Child loggers don't manage their own trace - just store prompt for reference
+        # Child loggers don't manage their own trace
         if self._is_child:
             self.user_prompt = user_prompt
             return None
@@ -577,7 +575,6 @@ class MaximLogger(Logger):
         start_time: Optional[int] = None,
         end_time: Optional[int] = None
     ) -> None:
-        # Determine span parent: use _parent_span for child loggers, root_trace otherwise
         span_parent = self._parent_span if self._is_child else self.root_trace
         if not span_parent:
             return
@@ -611,8 +608,9 @@ class MaximLogger(Logger):
             print(f"Warning: Failed to log Tool response to Maxim: {e}", file=sys.stderr)
 
     def end_trace(self, output: str, metadata: Dict[str, Any]) -> None:
-        # Child loggers don't manage their own trace - use end_child() instead
+        # Child loggers don't manage their own trace
         if self._is_child:
+            
             return
         
         if not self.root_trace:
@@ -637,8 +635,6 @@ class MaximLogger(Logger):
             self.session_id = metadata["session_id"]
         if "system_prompt" in metadata:
             self.system_prompt = metadata["system_prompt"]
-        
-        # For child loggers, add tags to the parent span
         if self._is_child:
             if self._parent_span:
                 for k, v in metadata.items():
@@ -650,7 +646,7 @@ class MaximLogger(Logger):
                 self.root_trace.add_tag(k, str(v))
 
     def flush(self, timeout_millis: int = 5000) -> None:
-        # Child loggers don't manage flush - parent handles it
+        # Child loggers don't manage flush
         if self._is_child:
             return
         
@@ -684,7 +680,7 @@ class MaximLogger(Logger):
                     print(f"Warning: Error flushing Maxim logger: {e}", file=sys.stderr)
 
     def shutdown(self) -> None:
-        # Child loggers just end their span, don't manage client lifecycle
+        # Child loggers just end their span, they don't manage client lifecycle
         if self._is_child:
             self.end_child()
             return
