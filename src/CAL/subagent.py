@@ -8,6 +8,7 @@ from google.genai import types
 from .agent import Agent
 from .tool import Tool
 from .content_blocks import ToolResultBlock, TextBlock
+from .llm import LLM
 
 
 class SubAgentTool(Tool):
@@ -19,12 +20,14 @@ class SubAgentTool(Tool):
         description: str,
         system_prompt: str,
         tools: List[Tool],
+        llm: LLM,
         max_calls: int = 10,
     ):
         self.name = name
         self.description = description
         self.system_prompt = system_prompt
         self.sub_tools = tools
+        self.sub_llm = llm
         self.sub_max_calls = max_calls
         self._parent_agent: Agent = None
         self.input_schema = {
@@ -73,9 +76,9 @@ class SubAgentTool(Tool):
         # Clone parent's memory to give sub-agent full context
         sub_memory = self._parent_agent.memory.clone()
 
-        # Create sub-agent with parent's context
+        # Create sub-agent with its own LLM configuration
         sub_agent = Agent(
-            llm=self._parent_agent.llm,
+            llm=self.sub_llm,
             system_prompt=self.system_prompt,
             max_calls=self.sub_max_calls,
             max_tokens=self._parent_agent.max_tokens,
@@ -108,6 +111,7 @@ class SubAgentTool(Tool):
 def subagent(
     system_prompt: str,
     tools: List[Tool],
+    llm: LLM,
     max_calls: int = 10
 ):
     """
@@ -116,7 +120,8 @@ def subagent(
     Example:
         @subagent(
             system_prompt="You are a code reviewer...",
-            tools=[review_tool, lint_tool]
+            tools=[review_tool, lint_tool],
+            llm=GeminiLLM(api_key="...", model="gemini-3-pro-preview", max_tokens=8192)
         )
         async def code_reviewer(task: str):
             '''Reviews code for issues.'''
@@ -125,6 +130,7 @@ def subagent(
     Args:
         system_prompt: System prompt for the sub-agent
         tools: List of tools available to the sub-agent
+        llm: LLM instance to use for the sub-agent
         max_calls: Maximum tool calls for the sub-agent (default 10)
 
     Returns:
@@ -136,6 +142,7 @@ def subagent(
             description=inspect.getdoc(func) or "",
             system_prompt=system_prompt,
             tools=tools,
+            llm=llm,
             max_calls=max_calls,
         )
     return decorator

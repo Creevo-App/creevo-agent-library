@@ -30,6 +30,7 @@ Use the `@subagent` decorator to define a subagent as its own tool:
 
 ```python
 from CAL import subagent, tool
+from CAL import GeminiLLM
 
 @tool
 async def review_file(path: str):
@@ -39,6 +40,7 @@ async def review_file(path: str):
 @subagent(
     system_prompt="You are a code reviewer...",
     tools=[review_file],
+    llm=GeminiLLM(api_key="...", model="gemini-2.0-flash-exp", max_tokens=8192),
     max_calls=5
 )
 async def code_reviewer(task: str):
@@ -49,7 +51,8 @@ async def code_reviewer(task: str):
 ### Key Behaviors
 
 - SubAgents inherit the parent's full conversation history via `memory.clone()`
-- Each subagent is its own distinct tool with predefined `system_prompt` and `tools`
+- Each subagent is its own distinct tool with predefined `system_prompt`, `tools`, and `llm` (model configuration)
+- Subagents use their own LLM instance, allowing different models for different subagents
 - Nesting is supported (subagents can include other subagents in their tools list)
 - `Agent.__init__` automatically binds SubAgentTools to the parent agent
 
