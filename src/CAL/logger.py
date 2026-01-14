@@ -142,6 +142,7 @@ class Logger(ABC):
 class LangSmithLogger(Logger):
     """
     Implementation of Logger using OpenTelemetry for LangSmith.
+    TODO: This is broken.
     """
     
     def __init__(self, project_name: str = "default"):
