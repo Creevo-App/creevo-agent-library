@@ -174,7 +174,7 @@ class GeminiLLM(LLM):
                 for part in candidate.content.parts:
                     if hasattr(part, 'text') and part.text:
                         content_blocks.append(TextBlock(text=part.text))
-                    elif hasattr(part, 'function_call'):
+                    elif hasattr(part, 'function_call') and part.function_call:
                         fc = part.function_call
                         content_blocks.append(
                             ToolUseBlock(
