@@ -428,11 +428,14 @@ class MaximLogger(Logger):
 
     def end_child(self) -> None:
         """End the wrapper span for this child logger."""
-        if self._is_child and self._parent_span:
-            self._parent_span.end()
-            self._parent_span = None
-        else:
-            raise RuntimeError("Cannot end child logger: no active parent span, this was called improperly.")
+        if not self._is_child:
+            raise RuntimeError("Cannot end child logger: not a child logger, this was called improperly.")
+        
+        if self._parent_span is None:
+            return
+        
+        self._parent_span.end()
+        self._parent_span = None
 
     def start_trace(self, name: str, user_prompt: str) -> Optional[str]:
         # Child loggers don't manage their own trace
