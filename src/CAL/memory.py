@@ -6,6 +6,7 @@ import sys
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
+from uuid import uuid4
 
 try:
     import tiktoken
@@ -271,15 +272,6 @@ class FullCompressionMemory(Memory):
         
         print(f"[Memory] Starting compression: {len(to_compress)} messages using {compression_method}", file=sys.stderr)
         
-        # Log to Maxim if logger available
-        if self.logger:
-            self.logger.log_metadata({
-                "compression_started": True,
-                "compression_method": compression_method,
-                "messages_to_compress": len(to_compress),
-                "session_id": self.session_id or "unknown",
-            })
-        
         # Track archive file for logging
         archive_file = None
         
@@ -323,20 +315,43 @@ class FullCompressionMemory(Memory):
         # Log compression complete
         print(f"[Memory] Compression complete: {len(to_compress)} messages -> 1 summary in {elapsed_time:.2f}s", file=sys.stderr)
         
-        # Log completion to Maxim
+        # Log as tool call to tracing system
         if self.logger:
-            compression_metadata = {
-                "compression_completed": True,
-                "compression_method": compression_method,
-                "messages_compressed": len(to_compress),
-                "compression_duration_seconds": round(elapsed_time, 3),
-                "summary_length": len(summary_text),
-            }
-            if archive_file:
-                compression_metadata["archive_file"] = archive_file
-                compression_metadata["archive_dir"] = str(self.archiver.session_dir)
+            tool_id = str(uuid4())
+            tool_use = ToolUseBlock(
+                id=tool_id,
+                name="memory_compression",
+                input={
+                    "compression_method": compression_method,
+                    "messages_to_compress": len(to_compress),
+                    "session_id": self.session_id or "unknown",
+                }
+            )
             
-            self.logger.log_metadata(compression_metadata)
+            result_content = f"Compressed {len(to_compress)} messages into 1 summary ({len(summary_text)} chars) in {elapsed_time:.2f}s"
+            if archive_file:
+                result_content += f"\nArchived to: {archive_file}"
+            
+            tool_result = ToolResultBlock(
+                tool_use_id=tool_id,
+                content=result_content,
+                is_error=False,
+                name="memory_compression",
+                metadata={
+                    "messages_compressed": len(to_compress),
+                    "compression_duration_seconds": round(elapsed_time, 3),
+                    "summary_length": len(summary_text),
+                    "archive_file": archive_file,
+                    "archive_dir": str(self.archiver.session_dir) if archive_file else None,
+                }
+            )
+            
+            self.logger.log_tool_response(
+                tool_use=tool_use,
+                result=tool_result,
+                start_time=start_time_ns,
+                end_time=end_time_ns,
+            )
 
     def _summarize_content(self, content: Union[str, List[ContentBlock]]) -> str:
         """Create a brief summary of message content (truncation-based fallback)."""
