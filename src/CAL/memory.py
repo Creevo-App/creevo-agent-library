@@ -109,7 +109,7 @@ class FullCompressionMemory(Memory):
 
     def __init__(
         self,
-        max_tokens: int = 100000,
+        max_tokens: int = 1000, #reduce this number for testing, need to put it back up after done 
         messages: Optional[List[Message]] = None,
         summarizer_llm: Optional["LLM"] = None,
         compression_config: Optional[CompressionConfig] = None,
