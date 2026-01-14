@@ -62,6 +62,13 @@ class Agent:
         self.session_id = session_id
         self.logger = logger
 
+        # Bind SubAgentTools to this agent for context access
+        # We do the import here at runtime to avoid circular imports at module load time
+        from .subagent import SubAgentTool
+        for tool in self.tools:
+            if isinstance(tool, SubAgentTool):
+                tool.bind_parent(self)
+
         # Initialize logger metadata
         if self.logger:
             self.logger.log_metadata({
