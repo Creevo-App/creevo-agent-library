@@ -22,11 +22,10 @@ from .content_blocks import (
     ToolResultBlock,
     ToolUseBlock,
 )
+from .categorization import CategorizedMessages, MessageCategorizer
 from .compression import (
     CompressionConfig,
     CompressionArchiver,
-    CategorizedMessages,
-    MessageCategorizer,
 )
 
 if TYPE_CHECKING:
