@@ -9,7 +9,7 @@ alwaysApply: false
 ## Architecture Overview
 
 - CAL is a Python library for building agentic AI applications
-- Main components: `Agent`, `LLM` (GeminiLLM), `Memory`, `Tool`, `Message`
+- Main components: `Agent`, `LLM` (GeminiLLM), `Memory`, `Tool`, `Message`, `SubAgentTool`
 - Package: `creevo-agent-library` (installed from GitHub: https://github.com/Creevo-App/creevo-agent-library)
 
 ## Memory Management
@@ -18,6 +18,64 @@ alwaysApply: false
 - Memory serializes to JSON for persistence across requests
 - Session state passed via `CONVERSATION_STATE` environment variable
 - Agent emits `__CAL_SESSION_STATE__` prefix for state serialization
+- Custom Memory implementations MUST implement `clone()` method (abstract in base class) for subagent support
+
+## SubAgent Architecture
+
+SubAgents enable multi-agent delegation where a main agent spawns specialized sub-agents via tool calls.
+
+### Defining SubAgents
+
+Use the `@subagent` decorator to define a subagent as its own tool:
+
+```python
+from CAL import subagent, tool
+from CAL import GeminiLLM
+
+@tool
+async def review_file(path: str):
+    """Review a file."""
+    return {"content": [{"type": "text", "text": "..."}], "metadata": {}}
+
+@subagent(
+    system_prompt="You are a code reviewer...",
+    tools=[review_file],
+    llm=GeminiLLM(api_key="...", model="gemini-2.0-flash-exp", max_tokens=8192),
+    max_calls=5
+)
+async def code_reviewer(task: str):
+    """Delegate code review to a specialized sub-agent."""
+    pass  # Body unused - decorator handles execution
+```
+
+### Key Behaviors
+
+- SubAgents inherit the parent's full conversation history via `memory.clone()`
+- Each subagent is its own distinct tool with predefined `system_prompt`, `tools`, and `llm` (model configuration)
+- Subagents use their own LLM instance, allowing different models for different subagents
+- Nesting is supported (subagents can include other subagents in their tools list)
+- `Agent.__init__` automatically binds SubAgentTools to the parent agent
+
+### Module Structure
+
+- [subagent.py](mdc:src/CAL/subagent.py) contains `SubAgentTool` and `@subagent` decorator
+- Kept separate from [tool.py](mdc:src/CAL/tool.py) to avoid circular imports with [agent.py](mdc:src/CAL/agent.py)
+
+## Circular Import Pattern
+
+When modules have circular dependencies:
+
+1. **Preferred**: Move dependent code to a separate module that can import both (e.g., `subagent.py` imports from both `agent.py` and `tool.py`)
+2. **Fallback**: Use local imports inside methods when circular imports at module load time are unavoidable
+
+Example from `Agent.__init__`:
+```python
+# Local import to avoid circular import at module load time
+from .subagent import SubAgentTool
+for tool in self.tools:
+    if isinstance(tool, SubAgentTool):
+        tool.bind_parent(self)
+```
 
 ## Gemini API Requirements
 
@@ -36,9 +94,11 @@ alwaysApply: false
 
 ## Tool Implementation
 
-- Use `@tool` decorator for tool functions
+- Use `@tool` decorator for regular tool functions
+- Use `@subagent` decorator for delegating to specialized sub-agents
 - Tools are async functions returning dict with `content` and `metadata` keys
 - Content should be a list of content blocks: `[{"type": "text", "text": "..."}]`
+- `ToolResultBlock.content` accepts either a string or `List[ContentBlock]`
 
 ## Debugging LLM Issues
 
