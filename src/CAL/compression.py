@@ -24,13 +24,13 @@ if TYPE_CHECKING:
 @dataclass
 class CompressionConfig:
     """Configuration for memory compression behavior."""
-    keep_recent_tokens: int = 10000    # Number of recent tokens to keep uncompressed
-    max_summary_tokens: int = 2000     # Max tokens for the summary output
+    keep_recent_tokens: int = 50000    # Number of recent tokens to keep uncompressed
+    max_summary_tokens: int = 8000     # Max tokens for the summary output
     preserve_tool_names: bool = True   # Include tool names in summary
     archive_tool_results: bool = True  # Archive full tool results to files
     archive_file_reads: bool = True    # Archive file read contents to files
     summary_style: str = "narrative"   # "narrative", "bullet", "structured"
-    compression_ratio: float = 0.3     # Target compression ratio hint
+    compression_ratio: float = 0.4     # Target compression ratio hint
 
 
 @dataclass
