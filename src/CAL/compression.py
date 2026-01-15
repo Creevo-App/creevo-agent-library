@@ -68,6 +68,7 @@ class CompressionArchiver:
         if base_dir:
             self._base_dir = Path(base_dir)
         else:
+            ## We have a ticket to address this in the future for temp clean up. 
             self._base_dir = Path(tempfile.gettempdir())
         
         self._session_dir = self._base_dir / f"cal_memory_{agent_name}"
@@ -119,7 +120,7 @@ class CompressionArchiver:
         self._ensure_directory()
         
         # Ensure unique filename by appending counter if needed
-        safe_filename = self._make_safe_filename(filename)
+        safe_filename = self._sanitize_filename(filename)
         file_path = self._session_dir / f"{safe_filename}.md"
         
         # Handle filename collisions
@@ -148,7 +149,7 @@ class CompressionArchiver:
         
         return file_path
     
-    def _make_safe_filename(self, filename: str) -> str:
+    def _sanitize_filename(self, filename: str) -> str:
         """Convert a filename to a safe format."""
         # Remove/replace unsafe characters
         safe = filename.lower()
