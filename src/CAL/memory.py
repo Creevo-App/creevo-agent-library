@@ -212,10 +212,16 @@ class FullCompressionMemory(Memory):
         
         # Ensure we keep at least 1 recent message if possible
         if not recent_messages and len(self._messages) > 1:
+            print(f"[Memory] Compress fallback: keeping last message (exceeded keep_recent_tokens={keep_recent_tokens})", file=sys.stderr)
+            if self.logger:
+                self.logger.log_metadata({"memory_compress_fallback": "single_message", "keep_recent_tokens": keep_recent_tokens})
             recent_messages = [self._messages[-1]]
         
         if len(recent_messages) >= len(self._messages) - 1:
             # All messages except initial would be kept, nothing to compress
+            print(f"[Memory] Skipping compression: keep_recent_tokens ({keep_recent_tokens}) >= max_tokens ({self.max_tokens}) or all messages fit", file=sys.stderr)
+            if self.logger:
+                self.logger.log_metadata({"memory_compress_skipped": "all_messages_fit", "keep_recent_tokens": keep_recent_tokens, "max_tokens": self.max_tokens})
             return
         
         to_compress = self._messages[1:len(self._messages) - len(recent_messages)]
