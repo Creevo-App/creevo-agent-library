@@ -126,7 +126,7 @@ class LangSmithLogger(Logger):
     def __init__(self, project_name: str = "default"):
         self.tracer = self._setup_tracing(project_name)
         self.root_span: Optional[Span] = None
-        self.session_id: str = "unknown"
+        self.agent_name: str = "unknown"
         self.system_prompt: str = ""
 
     def _setup_tracing(self, project_name: str):
@@ -177,16 +177,18 @@ class LangSmithLogger(Logger):
 
         self.root_span.set_attribute("input.value", input_value)
         
-        if self.session_id:
-            self.root_span.set_attribute("session.id", self.session_id)
-            self.root_span.set_attribute("langsmith.metadata.session_id", self.session_id)
+        if self.agent_name:
+            self.root_span.set_attribute("session.id", self.agent_name)
+            self.root_span.set_attribute("langsmith.metadata.agent_name", self.agent_name)
 
         return str(self.root_span.get_span_context().trace_id)
 
     def log_metadata(self, metadata: Dict[str, Any]) -> None:
         """Store metadata to be used in current or future spans."""
-        if "session_id" in metadata:
-            self.session_id = metadata["session_id"]
+        if "agent_name" in metadata:
+            self.agent_name = metadata["agent_name"]
+        elif "session_id" in metadata:  # Backward compatibility
+            self.agent_name = metadata["session_id"]
         if "system_prompt" in metadata:
             self.system_prompt = metadata["system_prompt"]
             
@@ -219,7 +221,7 @@ class LangSmithLogger(Logger):
             span.set_attribute("langsmith.span.kind", "LLM")
             span.set_attribute("gen_ai.system", provider or "unknown")
             span.set_attribute("gen_ai.request.model", model or "unknown")
-            span.set_attribute("session.id", self.session_id)
+            span.set_attribute("session.id", self.agent_name)
             span.set_attribute("langsmith.metadata.iteration", iteration)
 
             # Format content
@@ -271,7 +273,7 @@ class LangSmithLogger(Logger):
         
         try:
             span.set_attribute("langsmith.span.kind", "TOOL")
-            span.set_attribute("session.id", self.session_id)
+            span.set_attribute("session.id", self.agent_name)
             
             # Input
             input_str = json.dumps(tool_use.input) if isinstance(tool_use.input, dict) else str(tool_use.input)
@@ -323,12 +325,12 @@ class MaximLogger(Logger):
     Implementation of Logger for Maxim AI using the updated SDK v0.1.3+.
     """
     
-    def __init__(self, session_id: Optional[str] = None):
+    def __init__(self, agent_name: Optional[str] = None):
         self.maxim_client = None  # Keep reference to client for proper cleanup
         self.logger_instance = self._setup_maxim()
         self.root_trace = None
         self.maxim_session = None  # Maxim session object for proper session linking
-        self.session_id: str = session_id or "unknown"
+        self.agent_name: str = agent_name or "unknown"
         self.system_prompt: str = ""
         self.user_prompt: str = ""
         self._is_shutdown = False  # Track shutdown state to avoid duplicate cleanup
@@ -382,8 +384,8 @@ class MaximLogger(Logger):
             # Create or get Maxim session for proper session linking in UI
             if not self.maxim_session:
                 self.maxim_session = self.logger_instance.session({
-                    "id": self.session_id,
-                    "name": f"Session-{self.session_id}"
+                    "id": self.agent_name,
+                    "name": f"Session-{self.agent_name}"
                 })
             
             trace_id = str(uuid4())
@@ -428,7 +430,7 @@ class MaximLogger(Logger):
                 "tags": {
                     "iteration": iteration,
                     "model": model or "unknown",
-                    "session_id": self.session_id
+                    "agent_name": self.agent_name
                 }
             })
 
@@ -508,7 +510,7 @@ class MaximLogger(Logger):
                 "name": f"tool_execute_{tool_use.name}",
                 "tags": {
                     "tool_name": tool_use.name,
-                    "session_id": self.session_id,
+                    "agent_name": self.agent_name,
                     "is_error": result.is_error
                 }
             })
@@ -547,8 +549,10 @@ class MaximLogger(Logger):
             self.root_trace = None
 
     def log_metadata(self, metadata: Dict[str, Any]) -> None:
-        if "session_id" in metadata:
-            self.session_id = metadata["session_id"]
+        if "agent_name" in metadata:
+            self.agent_name = metadata["agent_name"]
+        elif "session_id" in metadata:  # Backward compatibility
+            self.agent_name = metadata["session_id"]
         if "system_prompt" in metadata:
             self.system_prompt = metadata["system_prompt"]
             

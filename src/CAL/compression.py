@@ -54,15 +54,15 @@ class CompressionArchiver:
     - Individual context files with tool calls and conversation data
     """
     
-    def __init__(self, session_id: str, base_dir: Optional[str] = None):
+    def __init__(self, agent_name: str, base_dir: Optional[str] = None):
         """
         Initialize the archiver.
         
         Args:
-            session_id: Unique session identifier for directory naming
+            agent_name: Unique agent identifier for directory naming
             base_dir: Optional base directory path. If None, uses system temp.
         """
-        self.session_id = session_id
+        self.agent_name = agent_name
         self._entries: List[ArchiveEntry] = []
         
         if base_dir:
@@ -70,7 +70,7 @@ class CompressionArchiver:
         else:
             self._base_dir = Path(tempfile.gettempdir())
         
-        self._session_dir = self._base_dir / f"cal_memory_{session_id}"
+        self._session_dir = self._base_dir / f"cal_memory_{agent_name}"
         self._initialized = False
     
     def _ensure_directory(self):
@@ -166,7 +166,7 @@ class CompressionArchiver:
         lines = [
             "# Conversation History Index",
             "",
-            f"## Session: {self.session_id}",
+            f"## Session: {self.agent_name}",
             f"Last Updated: {datetime.utcnow().isoformat()}Z",
             "",
             "## Archived Context",
@@ -222,7 +222,7 @@ class CompressionArchiver:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the archiver state for persistence."""
         return {
-            "session_id": self.session_id,
+            "agent_name": self.agent_name,
             "base_dir": str(self._base_dir),
             "entries": [
                 {
@@ -241,7 +241,7 @@ class CompressionArchiver:
     def from_dict(cls, data: Dict[str, Any]) -> "CompressionArchiver":
         """Restore archiver from serialized state."""
         archiver = cls(
-            session_id=data.get("session_id", "unknown"),
+            agent_name=data.get("agent_name", data.get("session_id", "unknown")),
             base_dir=data.get("base_dir"),
         )
         

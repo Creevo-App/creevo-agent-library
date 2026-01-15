@@ -115,7 +115,7 @@ class FullCompressionMemory(Memory):
         summarizer_llm: Optional["LLM"] = None,
         compression_config: Optional[CompressionConfig] = None,
         logger: Optional["Logger"] = None,
-        session_id: Optional[str] = None,
+        agent_name: Optional[str] = None,
         archiver: Optional[CompressionArchiver] = None,
     ):
         self.max_tokens = max_tokens
@@ -124,13 +124,13 @@ class FullCompressionMemory(Memory):
         self.summarizer_llm = summarizer_llm
         self.compression_config = compression_config or CompressionConfig()
         self.logger = logger
-        self.session_id = session_id
+        self.agent_name = agent_name
         
         # Initialize archiver for file-based compression
         if archiver:
             self.archiver = archiver
-        elif session_id:
-            self.archiver = CompressionArchiver(session_id=session_id)
+        elif agent_name:
+            self.archiver = CompressionArchiver(agent_name=agent_name)
         else:
             self.archiver = None
         
@@ -324,7 +324,7 @@ class FullCompressionMemory(Memory):
                 input={
                     "compression_method": compression_method,
                     "messages_to_compress": len(to_compress),
-                    "session_id": self.session_id or "unknown",
+                    "agent_name": self.agent_name or "unknown",
                 }
             )
             
@@ -788,7 +788,7 @@ OUTPUT ONLY VALID JSON (no markdown code blocks, no extra text):"""
                 "summary_style": self.compression_config.summary_style,
                 "compression_ratio": self.compression_config.compression_ratio,
             },
-            "session_id": self.session_id,
+            "agent_name": self.agent_name,
         }
         
         # Include archiver state if present
@@ -829,7 +829,7 @@ OUTPUT ONLY VALID JSON (no markdown code blocks, no extra text):"""
         
         messages_data = payload.get("messages", [])
         messages = [cls._message_from_dict(item) for item in messages_data]
-        session_id = payload.get("session_id")
+        agent_name = payload.get("agent_name", payload.get("session_id"))
         
         # Deserialize compression config
         config_data = payload.get("compression_config", {})
@@ -862,7 +862,7 @@ OUTPUT ONLY VALID JSON (no markdown code blocks, no extra text):"""
             summarizer_llm=summarizer_llm,
             compression_config=compression_config,
             logger=logger,
-            session_id=session_id,
+            agent_name=agent_name,
             archiver=archiver,
         )
 
@@ -872,7 +872,7 @@ OUTPUT ONLY VALID JSON (no markdown code blocks, no extra text):"""
         data: Optional[str],
         summarizer_llm: Optional["LLM"] = None,
         logger: Optional["Logger"] = None,
-        session_id: Optional[str] = None,
+        agent_name: Optional[str] = None,
     ) -> "FullCompressionMemory":
         """Construct memory from a JSON string.
         
@@ -880,15 +880,17 @@ OUTPUT ONLY VALID JSON (no markdown code blocks, no extra text):"""
             data: JSON string of serialized memory
             summarizer_llm: Optional LLM instance for intelligent compression
             logger: Optional logger for compression events
-            session_id: Optional session ID (used if not present in serialized data)
+            agent_name: Optional agent name (used if not present in serialized data)
         """
         if not data:
-            return cls(summarizer_llm=summarizer_llm, logger=logger, session_id=session_id)
+            return cls(summarizer_llm=summarizer_llm, logger=logger, agent_name=agent_name)
         
         payload = json.loads(data)
-        # Use provided session_id if not in payload
-        if session_id and not payload.get("session_id"):
-            payload["session_id"] = session_id
+        # Use provided agent_name if not in payload (backward compatibility with session_id)
+        if agent_name and not payload.get("agent_name") and not payload.get("session_id"):
+            payload["agent_name"] = agent_name
+        elif not payload.get("agent_name") and payload.get("session_id"):
+            payload["agent_name"] = payload.get("session_id")
         
         return cls.from_dict(payload, summarizer_llm=summarizer_llm, logger=logger)
 

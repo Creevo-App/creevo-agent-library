@@ -29,7 +29,7 @@ llm = GeminiLLM(model='gemini-3-pro-preview', api_key=None, max_tokens=4096)
 memory = FullCompressionMemory(max_items=50)
 
 # Initialize logger
-logger = MaximLogger(session_id="my-session")
+logger = MaximLogger(agent_name="my-session")
 
 # Create agent
 agent = Agent(
@@ -38,7 +38,7 @@ agent = Agent(
     max_calls=250,
     max_tokens=4096,
     memory=memory,
-    session_id="my-session",
+    agent_name="my-session",
     logger=logger,
     tools=[StopTool()]
 )
