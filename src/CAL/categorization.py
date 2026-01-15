@@ -112,19 +112,7 @@ class MessageCategorizer:
         tools_used = set()
         key_files = set()
         
-        # From tool calls
-        for entry in categorized.tool_calls:
-            if entry.get("tool_name"):
-                tools_used.add(entry["tool_name"])
-            # Try to extract file paths from tool inputs
-            tool_use = entry.get("tool_use")
-            if tool_use and hasattr(tool_use, "input"):
-                for key in ["path", "file_path", "filename", "target_file"]:
-                    if key in tool_use.input:
-                        key_files.add(str(tool_use.input[key]))
-        
-        # From file reads
-        for entry in categorized.file_reads:
+        for entry in categorized.tool_calls + categorized.file_reads:
             if entry.get("tool_name"):
                 tools_used.add(entry["tool_name"])
             tool_use = entry.get("tool_use")
