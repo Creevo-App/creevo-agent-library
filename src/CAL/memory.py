@@ -193,21 +193,22 @@ class FullCompressionMemory(Memory):
         
         keep_recent_tokens = self.compression_config.keep_recent_tokens
         
-        # Calculate how many recent messages to keep based on token count
+        # Find breakpoint by iterating backwards, accumulating tokens
         initial = self._messages[0]
         token_count = 0
-        recent_messages = []
+        breakpoint_idx = 1  # Default: include all messages after initial
         
-        # Start from the end and work backwards, accumulating tokens
         for i in range(len(self._messages) - 1, 0, -1):  # Skip index 0 (initial message)
             msg = self._messages[i]
             msg_tokens = self._estimate_message_tokens(msg)
             
             if token_count + msg_tokens > keep_recent_tokens:
+                breakpoint_idx = i + 1  # Start from the next message (which fits)
                 break
             
-            recent_messages.insert(0, msg)
             token_count += msg_tokens
+        
+        recent_messages = self._messages[breakpoint_idx:]
         
         # Ensure we keep at least 1 recent message if possible
         if not recent_messages and len(self._messages) > 1:
