@@ -8,12 +8,6 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
 from uuid import uuid4
 
-try:
-    import tiktoken
-    _TIKTOKEN_AVAILABLE = True
-except ImportError:
-    _TIKTOKEN_AVAILABLE = False
-
 from .message import Message, MessageRole
 from .content_blocks import (
     ContentBlock,
@@ -92,20 +86,6 @@ class FullCompressionMemory(Memory):
     When file-based archival is enabled (archiver provided), tool calls and
     context are stored in files with a history.md index for agent discovery.
     """
-    
-    # Lazy-loaded tiktoken encoding (cl100k_base is a good general-purpose encoding)
-    _encoding = None
-    
-    @classmethod
-    def _get_encoding(cls):
-        """Get or initialize tiktoken encoding."""
-        if cls._encoding is None and _TIKTOKEN_AVAILABLE:
-            try:
-                # Use cl100k_base encoding (used by GPT-4, good general-purpose)
-                cls._encoding = tiktoken.get_encoding("cl100k_base")
-            except Exception:
-                cls._encoding = False  # Mark as unavailable
-        return cls._encoding if cls._encoding else None
 
     def __init__(
         self,
@@ -149,66 +129,53 @@ class FullCompressionMemory(Memory):
 
     def _estimate_message_tokens(self, message: Message) -> int:
         """
-        Estimate the token count for a message.
+        Get or estimate the token count for a message.
         
         Priority order:
-        1. Use actual token count from message.usage if available (most accurate)
-        2. Use tiktoken for text content if available (accurate)
-        3. Fall back to character-based estimation (~4 chars per token)
+        1. Use actual token count from message.usage if available (from LLM response)
+        2. Fall back to character-based estimation (~4 chars per token)
         """
-        token_count = 0
-        
         # If message has usage metadata with token count, use that (most accurate)
         if message.usage and 'total_tokens' in message.usage:
             return message.usage['total_tokens']
         
-        # Try to use tiktoken if available
-        encoding = self._get_encoding()
-        use_tiktoken = encoding is not None
+        token_count = 0
         
-        def _count_tokens(text: str) -> int:
-            """Count tokens in text using tiktoken or fallback to estimation."""
-            if use_tiktoken:
-                try:
-                    return len(encoding.encode(text))
-                except Exception:
-                    # If encoding fails, fall back to estimation
-                    return len(text) // 4
-            else:
-                # Fallback: ~4 characters per token
-                return len(text) // 4
+        def _estimate_tokens(text: str) -> int:
+            """Estimate tokens in text using ~4 characters per token."""
+            return len(text) // 4
         
         # Estimate tokens from content
         if isinstance(message.content, str):
-            token_count = _count_tokens(message.content)
+            token_count = _estimate_tokens(message.content)
         elif isinstance(message.content, list):
             for block in message.content:
                 if isinstance(block, TextBlock):
-                    token_count += _count_tokens(block.text)
+                    token_count += _estimate_tokens(block.text)
                 elif isinstance(block, ToolUseBlock):
                     # Estimate tokens for tool use: name + input serialization
                     tool_text = f"{block.name}({str(block.input)})"
                     if block.thought:
                         tool_text += block.thought
-                    token_count += _count_tokens(tool_text)
+                    token_count += _estimate_tokens(tool_text)
                 elif isinstance(block, ToolResultBlock):
                     # Estimate tokens for tool result
                     if isinstance(block.content, str):
-                        token_count += _count_tokens(block.content)
+                        token_count += _estimate_tokens(block.content)
                     elif isinstance(block.content, list):
                         for sub_block in block.content:
                             if isinstance(sub_block, TextBlock):
-                                token_count += _count_tokens(sub_block.text)
+                                token_count += _estimate_tokens(sub_block.text)
                             else:
-                                token_count += _count_tokens(str(sub_block))
+                                token_count += _estimate_tokens(str(sub_block))
                     else:
-                        token_count += _count_tokens(str(block.content))
+                        token_count += _estimate_tokens(str(block.content))
                 elif isinstance(block, ImageBlock):
                     # Images consume significant tokens, estimate conservatively
                     token_count += 100  # Rough estimate for image tokens
                 else:
                     # Fallback for unknown block types
-                    token_count += _count_tokens(str(block))
+                    token_count += _estimate_tokens(str(block))
         
         # Ensure at least 1 token
         return max(1, token_count)

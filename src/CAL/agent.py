@@ -83,30 +83,6 @@ class Agent:
         """Expose current conversation history."""
         return self.memory.get_history()
     
-    def get_token_usage(self) -> dict:
-        """
-        Get cumulative token usage from all LLM responses in the conversation history.
-        
-        Returns:
-            Dictionary with 'prompt_tokens', 'completion_tokens', and 'total_tokens'
-            representing the cumulative usage across all assistant messages.
-        """
-        total_prompt = 0
-        total_completion = 0
-        total_tokens = 0
-        
-        for message in self.memory.get_history():
-            if message.role == MessageRole.ASSISTANT and message.usage:
-                usage = message.usage
-                total_prompt += usage.get('prompt_tokens', 0)
-                total_completion += usage.get('completion_tokens', 0)
-                total_tokens += usage.get('total_tokens', 0)
-        
-        return {
-            'prompt_tokens': total_prompt,
-            'completion_tokens': total_completion,
-            'total_tokens': total_tokens
-        }
     
     def _history_json(self) -> str:
         """Return the serialized conversation history."""
