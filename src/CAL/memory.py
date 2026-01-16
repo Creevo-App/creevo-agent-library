@@ -345,139 +345,6 @@ class FullCompressionMemory(Memory):
         
         return " ".join(parts) if parts else "[empty]"
 
-    def _format_message_for_prompt(self, msg: Message) -> str:
-        """Format a single message for inclusion in the compression prompt."""
-        role_label = msg.role.value.upper()
-        
-        if isinstance(msg.content, str):
-            return f"[{role_label}]: {msg.content}"
-        
-        parts = []
-        for block in msg.content:
-            if isinstance(block, TextBlock):
-                parts.append(f"Text: {block.text}")
-            elif isinstance(block, ToolUseBlock):
-                tool_info = f"Tool Call: {block.name}"
-                if self.compression_config.preserve_tool_names and block.input:
-                    # Include key input parameters (truncate large values)
-                    input_summary = {}
-                    for k, v in block.input.items():
-                        if isinstance(v, str) and len(v) > 200:
-                            input_summary[k] = v[:200] + "..."
-                        else:
-                            input_summary[k] = v
-                    tool_info += f" with inputs: {json.dumps(input_summary, default=str)}"
-                parts.append(tool_info)
-            elif isinstance(block, ToolResultBlock):
-                result_preview = ""
-                if isinstance(block.content, str):
-                    result_preview = block.content[:500] + "..." if len(block.content) > 500 else block.content
-                elif isinstance(block.content, list):
-                    text_parts = []
-                    for child in block.content:
-                        if isinstance(child, TextBlock):
-                            text_parts.append(child.text[:300])
-                        elif isinstance(child, ImageBlock):
-                            text_parts.append("[Image]")
-                    result_preview = " ".join(text_parts)[:500]
-                tool_name = block.name or "unknown"
-                parts.append(f"Tool Result ({tool_name}): {result_preview}")
-            elif isinstance(block, ImageBlock):
-                parts.append("[Image content]")
-        
-        return f"[{role_label}]:\n" + "\n".join(parts)
-
-    def _build_compression_prompt(self, messages_to_compress: List[Message]) -> str:
-        """
-        Build a structured prompt for the summarizer LLM.
-        
-        The prompt instructs the LLM to:
-        - Preserve key decisions and outcomes from tool calls
-        - Retain important file content that may be referenced later
-        - Summarize conversation flow coherently
-        """
-        formatted_messages = []
-        for i, msg in enumerate(messages_to_compress, 1):
-            formatted_messages.append(f"--- Message {i} ---\n{self._format_message_for_prompt(msg)}")
-        
-        conversation_text = "\n\n".join(formatted_messages)
-        
-        prompt = f"""You are a conversation summarizer for an AI coding assistant. Your task is to compress the following conversation history while preserving all important context.
-
-CONVERSATION TO SUMMARIZE:
-{conversation_text}
-
-INSTRUCTIONS:
-1. Identify and preserve:
-   - The user's goals and requests
-   - Key decisions made by the assistant
-   - Important file contents, code snippets, or data that may be referenced later
-   - Tool calls and their outcomes (what was done and what resulted)
-   - Any errors or issues encountered
-
-2. You may omit:
-   - Redundant information
-   - Verbose tool outputs that have already been processed
-   - Intermediate reasoning that led to a final decision
-
-3. Format your summary as a coherent narrative that could serve as context for continuing the conversation. Write it as if briefing someone who needs to continue this task.
-
-4. Keep the summary concise but complete. Aim for a summary that captures the essence of {len(messages_to_compress)} messages in a readable format.
-
-OUTPUT YOUR SUMMARY:"""
-        
-        return prompt
-
-    def _build_file_compression_prompt(
-        self, 
-        messages_to_compress: List[Message],
-        categorized: CategorizedMessages,
-        tools_used: List[str],
-        key_files: List[str],
-    ) -> str:
-        """
-        Build a prompt for file-based compression that requests structured JSON output.
-        
-        The LLM will provide:
-        - A semantic filename for the archive
-        - A brief summary for the history index
-        - A detailed summary for the context file
-        """
-        formatted_messages = []
-        for i, msg in enumerate(messages_to_compress, 1):
-            formatted_messages.append(f"--- Message {i} ---\n{self._format_message_for_prompt(msg)}")
-        
-        conversation_text = "\n\n".join(formatted_messages)
-        
-        prompt = f"""You are a conversation archiver for an AI coding assistant. Analyze the following conversation and provide structured metadata for archiving.
-
-CONVERSATION TO ARCHIVE:
-{conversation_text}
-
-CONTEXT:
-- Tools used: {', '.join(tools_used) if tools_used else 'None'}
-- Key files: {', '.join(key_files) if key_files else 'None'}
-- Number of tool calls: {len(categorized.tool_calls)}
-- Number of file reads: {len(categorized.file_reads)}
-
-INSTRUCTIONS:
-Analyze this conversation and output a JSON object with the following fields:
-
-1. "filename": A descriptive snake_case filename (without .md extension) that captures what this conversation segment is about. Examples: "user_authentication_implementation", "database_schema_exploration", "api_debugging_session", "file_structure_analysis"
-
-2. "summary": A brief 1-2 sentence summary suitable for an index/table of contents. This should quickly convey what happened in this segment.
-
-3. "detailed_summary": A comprehensive summary (2-4 paragraphs) that preserves:
-   - The user's goals and what was accomplished
-   - Key decisions made and their rationale
-   - Important outcomes from tool calls
-   - Any errors or issues that were encountered
-   - Context needed to continue the conversation
-
-OUTPUT ONLY VALID JSON (no markdown code blocks, no extra text):"""
-        
-        return prompt
-
     def _format_archive_content(
         self,
         messages_to_compress: List[Message],
@@ -591,9 +458,13 @@ OUTPUT ONLY VALID JSON (no markdown code blocks, no extra text):"""
         
         If an archiver is available, uses file-based compression:
         1. Categorizes messages
-        2. Asks LLM for semantic filename and summaries
+        2. Calls LLM with messages (LLM is expected to return JSON with filename, summary, detailed_summary)
         3. Archives full content to file
         4. Returns brief summary with file reference
+        
+        The LLM passed to FullCompressionMemory is expected to be pre-configured
+        with appropriate system prompts for compression. CAL does not build
+        prompts - all prompting is handled externally when creating the LLM.
         
         Otherwise falls back to inline summarization.
         """
@@ -606,22 +477,11 @@ OUTPUT ONLY VALID JSON (no markdown code blocks, no extra text):"""
         categorized = MessageCategorizer.categorize(messages_to_compress)
         tools_used, key_files = MessageCategorizer.extract_tools_and_files(categorized)
         
-        # Step 2: Get semantic filename and summaries from LLM
-        prompt = self._build_file_compression_prompt(
-            messages_to_compress, 
-            categorized, 
-            tools_used, 
-            key_files
-        )
-        
-        summary_request = Message(
-            role=MessageRole.USER,
-            content=[TextBlock(text=prompt)]
-        )
-        
+        # Step 2: Call the LLM with messages to compress
+        # The LLM is expected to return JSON with: filename, summary, detailed_summary
         response = self.summarizer_llm.generate_content(
-            system_prompt="You are a helpful assistant that analyzes conversations and outputs structured JSON.",
-            conversation_history=[summary_request],
+            system_prompt="",
+            conversation_history=messages_to_compress,
             tools=None
         )
         
@@ -667,20 +527,17 @@ OUTPUT ONLY VALID JSON (no markdown code blocks, no extra text):"""
 
     def _compress_with_llm_inline(self, messages_to_compress: List[Message]) -> str:
         """
-        Fallback: Use the summarizer LLM for inline summarization (no file archival).
+        Use the summarizer LLM for inline summarization (no file archival).
+        
+        The LLM passed to FullCompressionMemory is expected to be pre-configured
+        with appropriate system prompts for summarization. CAL does not build
+        prompts - all prompting is handled externally when creating the LLM.
         """
-        prompt = self._build_compression_prompt(messages_to_compress)
-        
-        # Create a temporary conversation for the summarizer
-        summary_request = Message(
-            role=MessageRole.USER,
-            content=[TextBlock(text=prompt)]
-        )
-        
-        # Call the summarizer LLM
+        # Call the summarizer LLM with the messages to compress directly
+        # The LLM is expected to handle summarization based on its configuration
         response = self.summarizer_llm.generate_content(
-            system_prompt="You are a helpful assistant that summarizes conversations accurately and concisely.",
-            conversation_history=[summary_request],
+            system_prompt="",
+            conversation_history=messages_to_compress,
             tools=None
         )
         
