@@ -64,7 +64,7 @@ class CompressionArchiver:
     
     def _ensure_directory(self):
         """Create the session directory if it doesn't exist."""
-        if not self._initialized:
+        if not self._initialized or not self._session_dir.exists():
             self._session_dir.mkdir(parents=True, exist_ok=True)
             self._initialized = True
     
