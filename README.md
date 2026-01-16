@@ -25,8 +25,9 @@ from CAL.logger import MaximLogger
 # Initialize LLM
 llm = GeminiLLM(model='gemini-3-pro-preview', api_key=None, max_tokens=4096)
 
-# Initialize memory
-memory = FullCompressionMemory(max_items=50)
+# Initialize memory with a summarizer LLM (required for compression)
+summarizer_llm = GeminiLLM(model='gemini-3-flash-preview', api_key=None, max_tokens=2048)
+memory = FullCompressionMemory(summarizer_llm=summarizer_llm, max_tokens=50000)
 
 # Initialize logger
 logger = MaximLogger(agent_name="my-session")
@@ -76,7 +77,7 @@ The `Agent` class implements the agentic loop:
 
 ### Memory
 
-- `FullCompressionMemory`: Keeps initial prompt, summarizes middle turns, keeps recent messages
+- `FullCompressionMemory`: LLM-based compression that keeps initial prompt, summarizes middle turns using an LLM, and keeps recent messages. Requires a `summarizer_llm` for compression.
 
 ### Tools
 

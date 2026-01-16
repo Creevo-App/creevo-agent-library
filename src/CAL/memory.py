@@ -78,10 +78,10 @@ class Memory(ABC):
 class FullCompressionMemory(Memory):
     """
     Memory for long-running agentic tasks. Keeps the initial user prompt,
-    summarizes middle turns, and keeps recent messages.
+    summarizes middle turns using LLM-based compression, and keeps recent messages.
     
-    Supports LLM-based intelligent summarization when a summarizer_llm is provided,
-    otherwise falls back to simple truncation-based compression.
+    Requires a summarizer_llm for intelligent compression. For non-LLM compression,
+    use a different Memory implementation.
     
     When file-based archival is enabled (archiver provided), tool calls and
     context are stored in files with a history.md index for agent discovery.
@@ -89,14 +89,16 @@ class FullCompressionMemory(Memory):
 
     def __init__(
         self,
+        summarizer_llm: "LLM",
         max_tokens: int = 50000,
         messages: Optional[List[Message]] = None,
-        summarizer_llm: Optional["LLM"] = None,
         compression_config: Optional[CompressionConfig] = None,
         logger: Optional["Logger"] = None,
         agent_name: Optional[str] = None,
         archiver: Optional[CompressionArchiver] = None,
     ):
+        if summarizer_llm is None:
+            raise ValueError("FullCompressionMemory requires a summarizer_llm for LLM-based compression")
         self.max_tokens = max_tokens
         self._messages: List[Message] = []
         self._total_tokens: int = 0  # Track running token count
@@ -231,13 +233,10 @@ class FullCompressionMemory(Memory):
             return
         
         # Determine compression method
-        use_file_based = self.summarizer_llm and self.archiver
-        if use_file_based:
+        if self.archiver:
             compression_method = "llm_file_based"
-        elif self.summarizer_llm:
-            compression_method = "llm_inline"
         else:
-            compression_method = "truncation"
+            compression_method = "llm_inline"
         
         # Log compression start
         start_time = time.time()
@@ -248,22 +247,13 @@ class FullCompressionMemory(Memory):
         # Track archive file for logging
         archive_file = None
         
-        # Generate summary using appropriate method
-        try:
-            if self.summarizer_llm:
-                summary_text = self._compress_with_llm(to_compress)
-                # Check if file was created (for file-based compression)
-                if self.archiver and self.archiver.has_archived_context():
-                    entries = self.archiver._entries
-                    if entries:
-                        archive_file = entries[-1].filename
-            else:
-                summary_text = self._compress_with_truncation(to_compress)
-        except Exception as e:
-            # If LLM compression fails, fall back to truncation
-            print(f"[Memory] LLM compression failed, falling back to truncation: {e}", file=sys.stderr)
-            summary_text = self._compress_with_truncation(to_compress)
-            compression_method = "truncation_fallback"
+        # Generate summary using LLM
+        summary_text = self._compress_with_llm(to_compress)
+        # Check if file was created (for file-based compression)
+        if self.archiver and self.archiver.has_archived_context():
+            entries = self.archiver._entries
+            if entries:
+                archive_file = entries[-1].filename
         
         elapsed_time = time.time() - start_time
         end_time_ns = time.time_ns()
@@ -325,25 +315,6 @@ class FullCompressionMemory(Memory):
                 start_time=start_time_ns,
                 end_time=end_time_ns,
             )
-
-    def _summarize_content(self, content: Union[str, List[ContentBlock]]) -> str:
-        """Create a brief summary of message content (truncation-based fallback)."""
-        if isinstance(content, str):
-            return content[:150] + "..." if len(content) > 150 else content
-        
-        parts = []
-        for block in content:
-            if isinstance(block, TextBlock):
-                text = block.text[:100] + "..." if len(block.text) > 100 else block.text
-                parts.append(text)
-            elif isinstance(block, ToolUseBlock):
-                parts.append(f"[Called {block.name}]")
-            elif isinstance(block, ToolResultBlock):
-                parts.append("[Tool result]")
-            elif isinstance(block, ImageBlock):
-                parts.append("[Image]")
-        
-        return " ".join(parts) if parts else "[empty]"
 
     def _format_archive_content(
         self,
@@ -552,13 +523,6 @@ class FullCompressionMemory(Memory):
         
         return "\n".join(text_parts) if text_parts else "[Summary generation failed]"
 
-    def _compress_with_truncation(self, messages_to_compress: List[Message]) -> str:
-        """Fallback: compress using simple truncation (original behavior)."""
-        summary_parts = [f"[Summary of {len(messages_to_compress)} previous turns:]"]
-        for msg in messages_to_compress:
-            summary_parts.append(f"- {msg.role.value.upper()}: {self._summarize_content(msg.content)}")
-        return "\n".join(summary_parts)
-
     def get_history(self) -> List[Message]:
         """
         Return the current conversation history.
@@ -635,14 +599,14 @@ class FullCompressionMemory(Memory):
     def from_dict(
         cls,
         payload: Dict[str, Any],
-        summarizer_llm: Optional["LLM"] = None,
+        summarizer_llm: "LLM",
         logger: Optional["Logger"] = None,
     ) -> "FullCompressionMemory":
         """Construct memory from a serialized dictionary payload.
         
         Args:
             payload: Serialized memory data
-            summarizer_llm: Optional LLM instance for intelligent compression
+            summarizer_llm: LLM instance for compression (required)
             logger: Optional logger for compression events
         """
         if not payload:
@@ -700,7 +664,7 @@ class FullCompressionMemory(Memory):
     def from_json(
         cls,
         data: Optional[str],
-        summarizer_llm: Optional["LLM"] = None,
+        summarizer_llm: "LLM",
         logger: Optional["Logger"] = None,
         agent_name: Optional[str] = None,
     ) -> "FullCompressionMemory":
@@ -708,7 +672,7 @@ class FullCompressionMemory(Memory):
         
         Args:
             data: JSON string of serialized memory
-            summarizer_llm: Optional LLM instance for intelligent compression
+            summarizer_llm: LLM instance for compression (required)
             logger: Optional logger for compression events
             agent_name: Optional agent name (used if not present in serialized data)
         """
