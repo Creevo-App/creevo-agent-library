@@ -286,10 +286,13 @@ Rules for the fields:
             response_text = "\n".join(text_parts)
         
         # Step 3: Parse the JSON response
-        parsed = self._parse_llm_json_response(response_text)
-        filename = parsed.get("filename", "context")
-        summary = parsed.get("summary", "Conversation context")
-        detailed_summary = parsed.get("detailed_summary", summary)
+        # parsed = self._parse_llm_json_response(response_text)
+        # filename = parsed.get("filename", "context")
+        # summary = parsed.get("summary", "Conversation context")
+        # detailed_summary = parsed.get("detailed_summary", summary)
+        filename = "context"
+        summary = response_text
+        detailed_summary = response_text
         
         # Step 4: Format and archive the content
         archive_content = self._format_archive_content(categorized, detailed_summary)
@@ -442,34 +445,34 @@ Rules for the fields:
         
         return "\n".join(lines)
 
-    def _parse_llm_json_response(self, response_text: str) -> Dict[str, Any]:
-        """
-        Parse JSON from LLM response, handling common formatting issues.
-        This is what claude said, not entirely sure if it is correct, I can rip whole function if we prefer?
-        LLMs often wrap JSON output in markdown code fences (```json ... ```)
-        even when asked for raw JSON. This method strips those fences before parsing.
-        """
-        text = response_text.strip()
-        
-        # Remove markdown code blocks if present (LLMs often wrap JSON in fences)
-        if text.startswith("```"):
-            lines = text.split("\n")
-            # Remove first line (```json or ```)
-            lines = lines[1:]
-            # Remove last line if it's ```
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines)
-        
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # Return defaults if parsing fails
-            return {
-                "filename": "context",
-                "summary": "Conversation context",
-                "detailed_summary": response_text,
-            }
+    # def _parse_llm_json_response(self, response_text: str) -> Dict[str, Any]:
+    #     """
+    #     Parse JSON from LLM response, handling common formatting issues.
+    #     This is what claude said, not entirely sure if it is correct, I can rip whole function if we prefer?
+    #     LLMs often wrap JSON output in markdown code fences (```json ... ```)
+    #     even when asked for raw JSON. This method strips those fences before parsing.
+    #     """
+    #     text = response_text.strip()
+    #     
+    #     # Remove markdown code blocks if present (LLMs often wrap JSON in fences)
+    #     if text.startswith("```"):
+    #         lines = text.split("\n")
+    #         # Remove first line (```json or ```)
+    #         lines = lines[1:]
+    #         # Remove last line if it's ```
+    #         if lines and lines[-1].strip() == "```":
+    #             lines = lines[:-1]
+    #         text = "\n".join(lines)
+    #     
+    #     try:
+    #         return json.loads(text)
+    #     except json.JSONDecodeError:
+    #         # Return defaults if parsing fails
+    #         return {
+    #             "filename": "context",
+    #             "summary": "Conversation context",
+    #             "detailed_summary": response_text,
+    #         }
 
     def get_history(self) -> List[Message]:
         """
