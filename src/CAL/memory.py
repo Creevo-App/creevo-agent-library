@@ -392,11 +392,8 @@ class FullCompressionMemory(Memory):
                 tool_result = entry.get("tool_result")
                 
                 file_path = "unknown"
-                if tool_use and hasattr(tool_use, "input"):
-                    for key in ["path", "file_path", "filename", "target_file"]:
-                        if key in tool_use.input:
-                            file_path = tool_use.input[key]
-                            break
+                if tool_use and hasattr(tool_use, "input") and "file_path" in tool_use.input:
+                    file_path = tool_use.input["file_path"]
                 
                 lines.append(f"### {file_path}")
                 if tool_result:

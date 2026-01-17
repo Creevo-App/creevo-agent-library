@@ -112,9 +112,7 @@ class MessageCategorizer:
             if entry.get("tool_name"):
                 tools_used.add(entry["tool_name"])
             tool_use = entry.get("tool_use")
-            if tool_use and hasattr(tool_use, "input"):
-                for key in ["path", "file_path", "filename", "target_file"]:
-                    if key in tool_use.input:
-                        key_files.add(str(tool_use.input[key]))
+            if tool_use and hasattr(tool_use, "input") and "file_path" in tool_use.input:
+                key_files.add(str(tool_use.input["file_path"]))
         
         return list(tools_used), list(key_files)
