@@ -250,8 +250,27 @@ class FullCompressionMemory(Memory):
         
         # Step 2: Call the summarizer LLM with messages to compress
         # The LLM is expected to return JSON with: filename, summary, detailed_summary
+        summarization_prompt = """You are a conversation summarizer. Analyze the conversation history and produce a JSON summary.
+
+Your task is to:
+1. Identify the main topic or task being discussed
+2. Capture key decisions, actions taken, and important context
+3. Note any files or resources that were referenced
+
+Respond with ONLY valid JSON in this exact format (no markdown, no code fences):
+{
+  "filename": "short_descriptive_name",
+  "summary": "A brief 1-2 sentence summary of what happened",
+  "detailed_summary": "A comprehensive summary covering key actions, decisions, tool usage, and outcomes. Include important context that would be needed to continue the conversation."
+}
+
+Rules for the fields:
+- filename: lowercase, underscores, no spaces, max 50 chars (e.g., "setup_database_schema", "debug_auth_flow")
+- summary: Brief overview, 1-2 sentences
+- detailed_summary: Thorough recap including tool calls made, files modified, decisions reached, and any pending items"""
+
         response = self.summarizer_llm.generate_content(
-            system_prompt="",
+            system_prompt=summarization_prompt,
             conversation_history=to_compress,
             tools=None
         )
