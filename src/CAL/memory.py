@@ -64,14 +64,24 @@ class Memory(ABC):
 
     @classmethod
     @abstractmethod
-    def from_dict(cls, payload: Dict[str, Any]) -> "Memory":
-        """Construct memory from a serialized dictionary payload."""
+    def from_dict(cls, payload: Dict[str, Any], **kwargs) -> "Memory":
+        """Construct memory from a serialized dictionary payload.
+        
+        Args:
+            payload: Serialized memory data
+            **kwargs: Implementation-specific arguments (e.g., summarizer_llm, logger)
+        """
         pass
 
     @classmethod
     @abstractmethod
-    def from_json(cls, data: Optional[str]) -> "Memory":
-        """Construct memory from a JSON string."""
+    def from_json(cls, data: Optional[str], **kwargs) -> "Memory":
+        """Construct memory from a JSON string.
+        
+        Args:
+            data: JSON string of serialized memory
+            **kwargs: Implementation-specific arguments (e.g., summarizer_llm, logger)
+        """
         pass
 
 
