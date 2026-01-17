@@ -53,6 +53,11 @@ class Memory(ABC):
         pass
 
     @abstractmethod
+    def clone(self) -> "Memory":
+        """Create a copy of this memory with the same history."""
+        pass
+
+    @abstractmethod
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the memory into a dictionary."""
         pass
@@ -492,6 +497,13 @@ class FullCompressionMemory(Memory):
         """Clear all stored messages and reset token count."""
         self._messages.clear()
         self._total_tokens = 0
+
+    def clone(self) -> 'FullCompressionMemory':
+        """Create a copy of this memory with the same history."""
+        return FullCompressionMemory(
+            max_items=self.max_items,
+            messages=list(self._messages)
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the memory into a dictionary.
