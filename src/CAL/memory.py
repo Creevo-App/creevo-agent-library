@@ -306,7 +306,6 @@ class FullCompressionMemory(Memory):
 
     def _format_archive_content(
         self,
-        messages_to_compress: List[Message],
         categorized: CategorizedMessages,
         detailed_summary: str,
     ) -> str:
@@ -455,7 +454,6 @@ class FullCompressionMemory(Memory):
         
         # Step 3: Format and archive the content
         archive_content = self._format_archive_content(
-            messages_to_compress,
             categorized,
             detailed_summary,
         )
