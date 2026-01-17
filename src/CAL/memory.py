@@ -580,15 +580,15 @@ Rules for the fields:
             # Convert old message-based config to token-based (estimate 400 tokens per message)
             keep_recent_tokens = config_data.get("keep_recent", 25) * 400
         else:
-            keep_recent_tokens = config_data.get("keep_recent_tokens", 10000)
+            keep_recent_tokens = config_data.get("keep_recent_tokens", 15000)
         compression_config = CompressionConfig(
             keep_recent_tokens=keep_recent_tokens,
-            max_summary_tokens=config_data.get("max_summary_tokens", 2000),
+            max_summary_tokens=config_data.get("max_summary_tokens", 8000),
             preserve_tool_names=config_data.get("preserve_tool_names", True),
             archive_tool_results=config_data.get("archive_tool_results", True),
             archive_file_reads=config_data.get("archive_file_reads", True),
             summary_style=config_data.get("summary_style", "narrative"),
-            compression_ratio=config_data.get("compression_ratio", 0.3),
+            compression_ratio=config_data.get("compression_ratio", 0.4),
         )
         
         # Deserialize archiver if present
