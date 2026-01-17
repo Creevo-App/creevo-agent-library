@@ -97,8 +97,6 @@ class FullCompressionMemory(Memory):
         agent_name: Optional[str] = None,
         archiver: Optional[CompressionArchiver] = None,
     ):
-        if summarizer_llm is None:
-            raise ValueError("FullCompressionMemory requires a summarizer_llm for LLM-based compression")
         self.max_tokens = max_tokens
         self._messages: List[Message] = []
         self._total_tokens: int = 0  # Track running token count
