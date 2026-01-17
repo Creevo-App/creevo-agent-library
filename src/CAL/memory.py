@@ -107,13 +107,12 @@ class FullCompressionMemory(Memory):
         self.logger = logger
         self.agent_name = agent_name
         
-        # Initialize archiver for file-based compression
         if archiver:
             self.archiver = archiver
-        elif agent_name:
-            self.archiver = CompressionArchiver(agent_name=agent_name)
         else:
-            self.archiver = None
+            if not self.agent_name:
+                self.agent_name = f"agent_{uuid4().hex[:8]}"
+            self.archiver = CompressionArchiver(agent_name=self.agent_name)
         
         if messages:
             for message in messages:
@@ -232,33 +231,22 @@ class FullCompressionMemory(Memory):
         if not to_compress:
             return
         
-        # Determine compression method
-        if self.archiver:
-            compression_method = "llm_file_based"
-        else:
-            compression_method = "llm_inline"
+        compression_method = "llm_file_based"
         
-        # Log compression start
         start_time = time.time()
         start_time_ns = time.time_ns()
         
         print(f"[Memory] Starting compression: {len(to_compress)} messages using {compression_method}", file=sys.stderr)
         
-        # Track archive file for logging
-        archive_file = None
-        
-        # Generate summary using LLM
         summary_text = self._compress_with_llm(to_compress)
-        # Check if file was created (for file-based compression)
-        if self.archiver and self.archiver.has_archived_context():
-            entries = self.archiver._entries
-            if entries:
-                archive_file = entries[-1].filename
+        
+        archive_file = None
+        if self.archiver.has_archived_context():
+            archive_file = self.archiver._entries[-1].filename
         
         elapsed_time = time.time() - start_time
         end_time_ns = time.time_ns()
         
-        # Create summary message
         summary_message = Message(
             role=MessageRole.USER,
             content=summary_text,
@@ -425,9 +413,9 @@ class FullCompressionMemory(Memory):
 
     def _compress_with_llm(self, messages_to_compress: List[Message]) -> str:
         """
-        Use the summarizer LLM to generate an intelligent summary.
+        Use the summarizer LLM to generate an intelligent summary with file-based archival.
         
-        If an archiver is available, uses file-based compression:
+        Process:
         1. Categorizes messages
         2. Calls LLM with messages (LLM is expected to return JSON with filename, summary, detailed_summary)
         3. Archives full content to file
@@ -436,14 +424,7 @@ class FullCompressionMemory(Memory):
         The LLM passed to FullCompressionMemory is expected to be pre-configured
         with appropriate system prompts for compression. CAL does not build
         prompts - all prompting is handled externally when creating the LLM.
-        
-        Otherwise falls back to inline summarization.
         """
-        # If no archiver, use simple inline summarization
-        if not self.archiver:
-            return self._compress_with_llm_inline(messages_to_compress)
-        
-        # File-based compression
         # Step 1: Categorize messages
         categorized = MessageCategorizer.categorize(messages_to_compress)
         tools_used, key_files = MessageCategorizer.extract_tools_and_files(categorized)
@@ -496,33 +477,6 @@ class FullCompressionMemory(Memory):
         # Step 4: Return summary with file reference
         return f"[Previous context archived to: {archive_path}]\n\n{summary}"
 
-    def _compress_with_llm_inline(self, messages_to_compress: List[Message]) -> str:
-        """
-        Use the summarizer LLM for inline summarization (no file archival).
-        
-        The LLM passed to FullCompressionMemory is expected to be pre-configured
-        with appropriate system prompts for summarization. CAL does not build
-        prompts - all prompting is handled externally when creating the LLM.
-        """
-        # Call the summarizer LLM with the messages to compress directly
-        # The LLM is expected to handle summarization based on its configuration
-        response = self.summarizer_llm.generate_content(
-            system_prompt="",
-            conversation_history=messages_to_compress,
-            tools=None
-        )
-        
-        # Extract text from response
-        if isinstance(response.content, str):
-            return response.content
-        
-        text_parts = []
-        for block in response.content:
-            if isinstance(block, TextBlock):
-                text_parts.append(block.text)
-        
-        return "\n".join(text_parts) if text_parts else "[Summary generation failed]"
-
     def get_history(self) -> List[Message]:
         """
         Return the current conversation history.
@@ -533,7 +487,7 @@ class FullCompressionMemory(Memory):
         history = list(self._messages)
         
         # If we have archived context, inject reference into the first message
-        if self.archiver and self.archiver.has_archived_context():
+        if self.archiver.has_archived_context():
             history_ref = self.archiver.get_history_reference()
             
             # Find the first user message (after initial) that has compressed metadata
@@ -583,11 +537,8 @@ class FullCompressionMemory(Memory):
                 "compression_ratio": self.compression_config.compression_ratio,
             },
             "agent_name": self.agent_name,
+            "archiver": self.archiver.to_dict(),
         }
-        
-        # Include archiver state if present
-        if self.archiver:
-            result["archiver"] = self.archiver.to_dict()
         
         return result
 
