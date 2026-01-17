@@ -4,7 +4,7 @@ Compression and archival utilities for conversation memory.
 import shutil
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -124,7 +124,7 @@ class CompressionArchiver:
         # Record the entry
         entry = ArchiveEntry(
             filename=file_path.name,
-            created_at=datetime.utcnow().isoformat() + "Z",
+            created_at=datetime.now(timezone.utc).isoformat() + "Z",
             message_range=message_range,
             tools_used=tools_used,
             key_files=key_files,
@@ -156,7 +156,7 @@ class CompressionArchiver:
             "# Conversation History Index",
             "",
             f"## Session: {self.agent_name}",
-            f"Last Updated: {datetime.utcnow().isoformat()}Z",
+            f"Last Updated: {datetime.now(timezone.utc).isoformat()}Z",
             "",
             "## Archived Context",
             "",
