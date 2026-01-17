@@ -9,11 +9,12 @@ from .content_blocks import ToolResultBlock, TextBlock, ImageBlock
 class Tool(ABC):
     """Abstract base class for tools that wrap callable functions."""
     
-    def __init__(self, function: Callable):
+    def __init__(self, function: Callable, is_read_tool: bool = False):
         self.function = function
         self.name = function.__name__
         self.description = inspect.getdoc(function) or ""
         self.input_schema = self._generate_schema()
+        self.is_read_tool = is_read_tool
     
     @abstractmethod
     async def execute(self, **kwargs) -> ToolResultBlock:
@@ -117,6 +118,7 @@ class _ToolImpl(Tool):
                 )
             
             metadata = result.get("metadata", {})
+            metadata["is_read_tool"] = self.is_read_tool
             content = result["content"]
             
             content_blocks = []
@@ -138,11 +140,12 @@ class _ToolImpl(Tool):
                 tool_use_id=tool_use_id,
                 content=f"Error executing {self.name}: {str(e)}",
                 is_error=True,
-                name=self.name
+                name=self.name,
+                metadata={"is_read_tool": self.is_read_tool}
             )
 
 
-def tool(func: Callable) -> Tool:
+def tool(func: Callable = None, *, is_read_tool: bool = False) -> Tool:
     """
     Decorator to convert an async function into a Tool.
     
@@ -157,14 +160,25 @@ def tool(func: Callable) -> Tool:
                 "content": [{"type": "text", "text": f"Result: {param1}, {param2}"}],
                 "metadata": {}
             }
+        
+        @tool(is_read_tool=True)
+        async def read_file(path: str):
+            '''Read a file'''
+            ...
     
     Args:
         func: The async function to wrap as a tool
+        is_read_tool: Whether this tool reads files (used for compression categorization)
         
     Returns:
         Tool instance
     """
-    return _ToolImpl(func)
+    def decorator(fn: Callable) -> Tool:
+        return _ToolImpl(fn, is_read_tool=is_read_tool)
+    
+    if func is not None:
+        return decorator(func)
+    return decorator
 
 
 class StopTool(Tool):

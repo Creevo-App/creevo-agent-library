@@ -33,9 +33,6 @@ class MessageCategorizer:
     - Images (reference only)
     """
     
-    # Tool names that indicate file reading operations
-    FILE_READ_TOOLS = {"read_file", "cat", "view_file", "get_file_content", "file_read"}
-    
     @classmethod
     def categorize(cls, messages: List[Message]) -> CategorizedMessages:
         """
@@ -70,9 +67,8 @@ class MessageCategorizer:
                     has_text_only = False
                     tool_use = pending_tool_uses.pop(block.tool_use_id, None)
                     
-                    # Determine if this is a file read
                     tool_name = block.name or (tool_use.name if tool_use else "")
-                    is_file_read = tool_name.lower() in cls.FILE_READ_TOOLS
+                    is_read_tool = block.metadata.get("is_read_tool", False) if block.metadata else False
                     
                     entry = {
                         "tool_use": tool_use,
@@ -80,7 +76,7 @@ class MessageCategorizer:
                         "tool_name": tool_name,
                     }
                     
-                    if is_file_read:
+                    if is_read_tool:
                         result.file_reads.append(entry)
                     else:
                         result.tool_calls.append(entry)
