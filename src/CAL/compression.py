@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 @dataclass
 class CompressionConfig:
     """Configuration for memory compression behavior."""
-    keep_recent_tokens: int = 50000    # Number of recent tokens to keep uncompressed
+    keep_recent_tokens: int = 15000    # Number of recent tokens to keep uncompressed
     max_summary_tokens: int = 8000     # Max tokens for the summary output
     preserve_tool_names: bool = True   # Include tool names in summary
     archive_tool_results: bool = True  # Archive full tool results to files
