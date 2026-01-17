@@ -43,11 +43,6 @@ class Memory(ABC):
         pass
 
     @abstractmethod
-    def clear(self):
-        """Clear all stored messages."""
-        pass
-
-    @abstractmethod
     def compress(self):
         """Compress memory to reduce size."""
         pass
@@ -492,11 +487,6 @@ class FullCompressionMemory(Memory):
                     break
         
         return history
-
-    def clear(self):
-        """Clear all stored messages and reset token count."""
-        self._messages.clear()
-        self._total_tokens = 0
 
     def clone(self) -> 'FullCompressionMemory':
         """Create a copy of this memory with the same history."""
