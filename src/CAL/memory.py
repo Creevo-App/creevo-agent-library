@@ -186,8 +186,8 @@ class FullCompressionMemory(Memory):
         Compress memory: keep initial user message, summarize middle,
         keep most recent messages up to token limit (keep_recent_tokens).
         
-        Uses LLM-based summarization if summarizer_llm is available,
-        otherwise falls back to truncation-based compression.
+        Uses LLM-based summarization to generate a summary, then archives
+        full context to files for agent discovery via history.md index.
         """
         if len(self._messages) <= 3:
             return
@@ -231,18 +231,54 @@ class FullCompressionMemory(Memory):
         if not to_compress:
             return
         
-        compression_method = "llm_file_based"
-        
         start_time = time.time()
         start_time_ns = time.time_ns()
         
-        print(f"[Memory] Starting compression: {len(to_compress)} messages using {compression_method}", file=sys.stderr)
+        print(f"[Memory] Starting compression: {len(to_compress)} messages", file=sys.stderr)
         
-        summary_text = self._compress_with_llm(to_compress)
+        # Step 1: Categorize messages for intelligent compression
+        categorized = MessageCategorizer.categorize(to_compress)
+        tools_used, key_files = MessageCategorizer.extract_tools_and_files(categorized)
         
-        archive_file = None
-        if self.archiver.has_archived_context():
-            archive_file = self.archiver._entries[-1].filename
+        # Step 2: Call the summarizer LLM with messages to compress
+        # The LLM is expected to return JSON with: filename, summary, detailed_summary
+        response = self.summarizer_llm.generate_content(
+            system_prompt="",
+            conversation_history=to_compress,
+            tools=None
+        )
+        
+        # Extract response text
+        if isinstance(response.content, str):
+            response_text = response.content
+        else:
+            text_parts = []
+            for block in response.content:
+                if isinstance(block, TextBlock):
+                    text_parts.append(block.text)
+            response_text = "\n".join(text_parts)
+        
+        # Step 3: Parse the JSON response
+        parsed = self._parse_llm_json_response(response_text)
+        filename = parsed.get("filename", "context")
+        summary = parsed.get("summary", "Conversation context")
+        detailed_summary = parsed.get("detailed_summary", summary)
+        
+        # Step 4: Format and archive the content
+        archive_content = self._format_archive_content(categorized, detailed_summary)
+        message_range = f"{len(to_compress)} messages"
+        
+        archive_path = self.archiver.write_context_file(
+            filename=filename,
+            content=archive_content,
+            message_range=message_range,
+            tools_used=tools_used,
+            key_files=key_files,
+            summary=summary,
+        )
+        
+        summary_text = f"[Previous context archived to: {archive_path}]\n\n{summary}"
+        archive_file = self.archiver._entries[-1].filename
         
         elapsed_time = time.time() - start_time
         end_time_ns = time.time_ns()
@@ -253,7 +289,6 @@ class FullCompressionMemory(Memory):
             metadata={
                 "compressed": True,
                 "original_count": len(to_compress),
-                "compression_method": compression_method,
                 "archive_file": archive_file,
             }
         )
@@ -273,15 +308,13 @@ class FullCompressionMemory(Memory):
                 id=tool_id,
                 name="memory_compression",
                 input={
-                    "compression_method": compression_method,
                     "messages_to_compress": len(to_compress),
                     "agent_name": self.agent_name or "unknown",
                 }
             )
             
             result_content = f"Compressed {len(to_compress)} messages into 1 summary ({len(summary_text)} chars) in {elapsed_time:.2f}s"
-            if archive_file:
-                result_content += f"\nArchived to: {archive_file}"
+            result_content += f"\nArchived to: {archive_file}"
             
             tool_result = ToolResultBlock(
                 tool_use_id=tool_id,
@@ -293,7 +326,7 @@ class FullCompressionMemory(Memory):
                     "compression_duration_seconds": round(elapsed_time, 3),
                     "summary_length": len(summary_text),
                     "archive_file": archive_file,
-                    "archive_dir": str(self.archiver.session_dir) if archive_file else None,
+                    "archive_dir": str(self.archiver.session_dir),
                 }
             )
             
@@ -352,7 +385,6 @@ class FullCompressionMemory(Memory):
                     lines.append(f"**Result{error_marker}:**\n```\n{result_str}\n```")
                 lines.append("")
         
-        # Add file reads section (with more detail preserved)
         if categorized.file_reads:
             lines.extend(["## File Reads", ""])
             for entry in categorized.file_reads:
@@ -387,10 +419,15 @@ class FullCompressionMemory(Memory):
         return "\n".join(lines)
 
     def _parse_llm_json_response(self, response_text: str) -> Dict[str, Any]:
-        """Parse JSON from LLM response, handling common formatting issues."""
+        """
+        Parse JSON from LLM response, handling common formatting issues.
+        This is what claude said, not entirely sure if it is correct, I can rip whole function if we prefer?
+        LLMs often wrap JSON output in markdown code fences (```json ... ```)
+        even when asked for raw JSON. This method strips those fences before parsing.
+        """
         text = response_text.strip()
         
-        # Remove markdown code blocks if present
+        # Remove markdown code blocks if present (LLMs often wrap JSON in fences)
         if text.startswith("```"):
             lines = text.split("\n")
             # Remove first line (```json or ```)
@@ -409,71 +446,6 @@ class FullCompressionMemory(Memory):
                 "summary": "Conversation context",
                 "detailed_summary": response_text,
             }
-
-    def _compress_with_llm(self, messages_to_compress: List[Message]) -> str:
-        """
-        Use the summarizer LLM to generate an intelligent summary with file-based archival.
-        
-        Process:
-        1. Categorizes messages
-        2. Calls LLM with messages (LLM is expected to return JSON with filename, summary, detailed_summary)
-        3. Archives full content to file
-        4. Returns brief summary with file reference
-        
-        The LLM passed to FullCompressionMemory is expected to be pre-configured
-        with appropriate system prompts for compression. CAL does not build
-        prompts - all prompting is handled externally when creating the LLM.
-        """
-        # Step 1: Categorize messages
-        categorized = MessageCategorizer.categorize(messages_to_compress)
-        tools_used, key_files = MessageCategorizer.extract_tools_and_files(categorized)
-        
-        # Step 2: Call the LLM with messages to compress
-        # The LLM is expected to return JSON with: filename, summary, detailed_summary
-        response = self.summarizer_llm.generate_content(
-            system_prompt="",
-            conversation_history=messages_to_compress,
-            tools=None
-        )
-        
-        # Extract response text
-        if isinstance(response.content, str):
-            response_text = response.content
-        else:
-            text_parts = []
-            for block in response.content:
-                if isinstance(block, TextBlock):
-                    text_parts.append(block.text)
-            response_text = "\n".join(text_parts)
-        
-        # Parse the JSON response
-        parsed = self._parse_llm_json_response(response_text)
-        filename = parsed.get("filename", "context")
-        summary = parsed.get("summary", "Conversation context")
-        detailed_summary = parsed.get("detailed_summary", summary)
-        
-        # Step 3: Format and archive the content
-        archive_content = self._format_archive_content(
-            categorized,
-            detailed_summary,
-        )
-        
-        # Calculate message range
-        # We don't have message indices directly, so use count
-        message_range = f"{len(messages_to_compress)} messages"
-        
-        # Write to archive file
-        archive_path = self.archiver.write_context_file(
-            filename=filename,
-            content=archive_content,
-            message_range=message_range,
-            tools_used=tools_used,
-            key_files=key_files,
-            summary=summary,
-        )
-        
-        # Step 4: Return summary with file reference
-        return f"[Previous context archived to: {archive_path}]\n\n{summary}"
 
     def get_history(self) -> List[Message]:
         """
