@@ -461,6 +461,9 @@ Rules for the fields:
         Strips tool call structure and creates a readable text format
         that the summarizer LLM can process without Gemini's strict
         function call sequence requirements.
+        
+        Uses clear delimiters to preserve structure while avoiding
+        function_call/function_response parts that trigger sequence validation.
         """
         lines = []
         for msg in messages:
@@ -475,24 +478,25 @@ Rules for the fields:
                 if isinstance(block, TextBlock):
                     parts.append(block.text)
                 elif isinstance(block, ToolUseBlock):
-                    input_str = json.dumps(block.input, default=str)
-                    parts.append(f"[Called tool '{block.name}' with: {input_str}]")
+                    input_str = json.dumps(block.input, indent=2, default=str)
+                    parts.append(f"\n--- Tool Call: {block.name} ---\n{input_str}\n---")
                 elif isinstance(block, ToolResultBlock):
                     if isinstance(block.content, str):
-                        result_preview = block.content[:500]
+                        result_text = block.content
                     elif isinstance(block.content, list):
                         text_parts = []
                         for child in block.content:
                             if isinstance(child, TextBlock):
                                 text_parts.append(child.text)
-                        result_preview = "\n".join(text_parts)[:500]
+                        result_text = "\n".join(text_parts)
                     else:
-                        result_preview = str(block.content)[:500]
-                    error_marker = " (ERROR)" if block.is_error else ""
-                    parts.append(f"[Tool result{error_marker}: {result_preview}]")
+                        result_text = str(block.content)
+                    error_marker = " [ERROR]" if block.is_error else ""
+                    tool_name = block.name or "unknown"
+                    parts.append(f"\n--- Tool Result ({tool_name}){error_marker} ---\n{result_text}\n---")
             
             if parts:
-                lines.append(f"[{role}]: {' '.join(parts)}")
+                lines.append(f"[{role}]: {''.join(parts)}")
         
         return "\n\n".join(lines)
 
