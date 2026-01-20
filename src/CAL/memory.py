@@ -140,13 +140,15 @@ class FullCompressionMemory(Memory):
         """
         Get or estimate the token count for a message.
         
-        Priority order:
-        1. Use actual token count from message.usage if available (from LLM response)
-        2. Fall back to character-based estimation (~4 chars per token)
+        For assistant messages with usage data, use completion_tokens (output only)
+        since total_tokens includes all prompt tokens which are already counted.
+        For other messages, estimate from content.
         """
-        # If message has usage metadata with token count, use that (most accurate)
-        if message.usage and 'total_tokens' in message.usage:
-            return message.usage['total_tokens']
+        # For assistant messages, use completion_tokens to avoid double-counting
+        # total_tokens = prompt_tokens + completion_tokens, but prompt is already counted
+        if message.role == MessageRole.ASSISTANT and message.usage:
+            if 'completion_tokens' in message.usage:
+                return message.usage['completion_tokens']
         
         token_count = 0
         
@@ -269,9 +271,16 @@ Rules for the fields:
 - summary: Brief overview, 1-2 sentences
 - detailed_summary: Thorough recap including tool calls made, files modified, decisions reached, and any pending items"""
 
+        # Convert messages to text-only format to avoid Gemini sequence issues
+        text_history = self._messages_to_text_for_summarization(to_compress)
+        summary_request = Message(
+            role=MessageRole.USER,
+            content=f"Summarize the following conversation:\n\n{text_history}"
+        )
+
         response = self.summarizer_llm.generate_content(
             system_prompt=summarization_prompt,
-            conversation_history=to_compress,
+            conversation_history=[summary_request],
             tools=None
         )
         
@@ -444,6 +453,52 @@ Rules for the fields:
                 lines.append("")
         
         return "\n".join(lines)
+
+    def _messages_to_text_for_summarization(self, messages: List[Message]) -> str:
+        """
+        Convert messages to a text representation for summarization.
+        
+        Strips tool call structure and creates a readable text format
+        that the summarizer LLM can process without Gemini's strict
+        function call sequence requirements.
+        
+        Uses clear delimiters to preserve structure while avoiding
+        function_call/function_response parts that trigger sequence validation.
+        """
+        lines = []
+        for msg in messages:
+            role = msg.role.value.upper()
+            
+            if isinstance(msg.content, str):
+                lines.append(f"[{role}]: {msg.content}")
+                continue
+            
+            parts = []
+            for block in msg.content:
+                if isinstance(block, TextBlock):
+                    parts.append(block.text)
+                elif isinstance(block, ToolUseBlock):
+                    input_str = json.dumps(block.input, indent=2, default=str)
+                    parts.append(f"\n--- Tool Call: {block.name} ---\n{input_str}\n---")
+                elif isinstance(block, ToolResultBlock):
+                    if isinstance(block.content, str):
+                        result_text = block.content
+                    elif isinstance(block.content, list):
+                        text_parts = []
+                        for child in block.content:
+                            if isinstance(child, TextBlock):
+                                text_parts.append(child.text)
+                        result_text = "\n".join(text_parts)
+                    else:
+                        result_text = str(block.content)
+                    error_marker = " [ERROR]" if block.is_error else ""
+                    tool_name = block.name or "unknown"
+                    parts.append(f"\n--- Tool Result ({tool_name}){error_marker} ---\n{result_text}\n---")
+            
+            if parts:
+                lines.append(f"[{role}]: {''.join(parts)}")
+        
+        return "\n\n".join(lines)
 
     # def _parse_llm_json_response(self, response_text: str) -> Dict[str, Any]:
     #     """
