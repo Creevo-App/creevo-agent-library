@@ -269,9 +269,16 @@ Rules for the fields:
 - summary: Brief overview, 1-2 sentences
 - detailed_summary: Thorough recap including tool calls made, files modified, decisions reached, and any pending items"""
 
+        # Convert messages to text-only format to avoid Gemini sequence issues
+        text_history = self._messages_to_text_for_summarization(to_compress)
+        summary_request = Message(
+            role=MessageRole.USER,
+            content=f"Summarize the following conversation:\n\n{text_history}"
+        )
+
         response = self.summarizer_llm.generate_content(
             system_prompt=summarization_prompt,
-            conversation_history=to_compress,
+            conversation_history=[summary_request],
             tools=None
         )
         
@@ -444,6 +451,48 @@ Rules for the fields:
                 lines.append("")
         
         return "\n".join(lines)
+
+    def _messages_to_text_for_summarization(self, messages: List[Message]) -> str:
+        """
+        Convert messages to a text representation for summarization.
+        
+        Strips tool call structure and creates a readable text format
+        that the summarizer LLM can process without Gemini's strict
+        function call sequence requirements.
+        """
+        lines = []
+        for msg in messages:
+            role = msg.role.value.upper()
+            
+            if isinstance(msg.content, str):
+                lines.append(f"[{role}]: {msg.content}")
+                continue
+            
+            parts = []
+            for block in msg.content:
+                if isinstance(block, TextBlock):
+                    parts.append(block.text)
+                elif isinstance(block, ToolUseBlock):
+                    input_str = json.dumps(block.input, default=str)
+                    parts.append(f"[Called tool '{block.name}' with: {input_str}]")
+                elif isinstance(block, ToolResultBlock):
+                    if isinstance(block.content, str):
+                        result_preview = block.content[:500]
+                    elif isinstance(block.content, list):
+                        text_parts = []
+                        for child in block.content:
+                            if isinstance(child, TextBlock):
+                                text_parts.append(child.text)
+                        result_preview = "\n".join(text_parts)[:500]
+                    else:
+                        result_preview = str(block.content)[:500]
+                    error_marker = " (ERROR)" if block.is_error else ""
+                    parts.append(f"[Tool result{error_marker}: {result_preview}]")
+            
+            if parts:
+                lines.append(f"[{role}]: {' '.join(parts)}")
+        
+        return "\n\n".join(lines)
 
     # def _parse_llm_json_response(self, response_text: str) -> Dict[str, Any]:
     #     """
