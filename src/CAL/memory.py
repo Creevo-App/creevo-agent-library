@@ -140,13 +140,15 @@ class FullCompressionMemory(Memory):
         """
         Get or estimate the token count for a message.
         
-        Priority order:
-        1. Use actual token count from message.usage if available (from LLM response)
-        2. Fall back to character-based estimation (~4 chars per token)
+        For assistant messages with usage data, use completion_tokens (output only)
+        since total_tokens includes all prompt tokens which are already counted.
+        For other messages, estimate from content.
         """
-        # If message has usage metadata with token count, use that (most accurate)
-        if message.usage and 'total_tokens' in message.usage:
-            return message.usage['total_tokens']
+        # For assistant messages, use completion_tokens to avoid double-counting
+        # total_tokens = prompt_tokens + completion_tokens, but prompt is already counted
+        if message.role == MessageRole.ASSISTANT and message.usage:
+            if 'completion_tokens' in message.usage:
+                return message.usage['completion_tokens']
         
         token_count = 0
         
