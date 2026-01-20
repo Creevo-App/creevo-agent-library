@@ -265,23 +265,59 @@ class Agent:
                         end_time=llm_end_time
                     )
 
-                # Step 2: Add agent message to conversation history
-                self.memory.add_message(agent_message)
-                
-                # Check MAX_TOKENS
+                # Check for error finish reasons before adding to history
                 if hasattr(agent_message, 'metadata') and agent_message.metadata:
                     finish_reason = agent_message.metadata.get('finish_reason')
                     if finish_reason and 'MAX_TOKENS' in finish_reason:
+                        self.memory.add_message(agent_message)
                         workflow_status = "completed_max_tokens"
                         print("Hit MAX_TOKENS, stopping agent loop", file=sys.stderr)
                         break
+                    
+                    # Handle MALFORMED_FUNCTION_CALL by retrying (up to 3 times)
+                    if finish_reason and 'MALFORMED_FUNCTION_CALL' in finish_reason:
+                        malformed_retries = getattr(self, '_malformed_retries', 0)
+                        if malformed_retries < 3:
+                            self._malformed_retries = malformed_retries + 1
+                            print(f"MALFORMED_FUNCTION_CALL detected, retry {self._malformed_retries}/3", file=sys.stderr)
+                            # Don't add malformed message to history, just retry
+                            continue
+                        else:
+                            self.memory.add_message(agent_message)
+                            print("MALFORMED_FUNCTION_CALL: max retries reached, stopping", file=sys.stderr)
+                            workflow_status = "error_malformed_function_call"
+                            break
+                    else:
+                        # Reset retry counter on successful LLM response
+                        self._malformed_retries = 0
+
+                # Step 2: Add agent message to conversation history
+                self.memory.add_message(agent_message)
                 
                 # Step 3: Parse tool uses
                 tool_uses = self._parse_tool_uses(agent_message)
                 
+                # If no tools returned but stop hasn't been called, prompt the LLM to continue
                 if not tool_uses:
-                    workflow_status = "completed_no_tools"
-                    break
+                    no_tool_retries = getattr(self, '_no_tool_retries', 0)
+                    if no_tool_retries < 3:
+                        self._no_tool_retries = no_tool_retries + 1
+                        print(f"No tool calls returned, prompting to continue ({self._no_tool_retries}/3)", file=sys.stderr)
+                        # Add a user message prompting the LLM to use tools
+                        prompt_message = Message(
+                            role=MessageRole.USER, 
+                            content=[TextBlock(text="Continue with your task. You must use tool calls to make progress. When you are done, use the stop tool.")]
+                        )
+                        self.memory.add_message(prompt_message)
+                        iteration += 1
+                        continue
+                    else:
+                        print("No tool calls after 3 prompts, stopping", file=sys.stderr)
+                        workflow_status = "completed_no_tools"
+                        break
+                else:
+                    # Reset no-tool retry counter when tools are called
+                    self._no_tool_retries = 0
                 
                 emit_progress(
                     self.agent_name,
@@ -332,6 +368,7 @@ class Agent:
                 "completed_max_tokens": "Reached internal limit, finishing up...",
                 "completed_max_iterations": "Finished maximum number of planning steps.",
                 "completed_stop": "Completed building your game!",
+                "error_malformed_function_call": "Encountered an error, finishing up...",
             }.get(workflow_status, "Wrapping up...")
 
             emit_progress(
