@@ -25,7 +25,7 @@ def test_maxim_logger_noop_without_env(monkeypatch):
     monkeypatch.delenv("MAXIM_API_KEY", raising=False)
     monkeypatch.delenv("MAXIM_LOG_REPO_ID", raising=False)
 
-    logger = MaximLogger(session_id="session")
+    logger = MaximLogger(agent_name="session")
     assert logger.logger_instance is None
     assert logger.start_trace("run", "prompt") is None
 
@@ -44,7 +44,7 @@ def test_maxim_logger_records_trace_data():
     if not api_key or not log_repo_id:
         pytest.skip("MAXIM_API_KEY and MAXIM_LOG_REPO_ID must be set")
 
-    logger = MaximLogger(session_id="test-session")
+    logger = MaximLogger(agent_name="test-session")
     if logger.logger_instance is None:
         pytest.skip("Maxim SDK failed to initialize (may already be initialized)")
 

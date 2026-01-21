@@ -50,7 +50,8 @@ async def test_tool_decorator_executes():
 
     assert result.is_error is False
     assert result.name == "echo"
-    assert result.metadata == {"source": "test"}
+    assert result.metadata["source"] == "test"
+    assert result.metadata.get("is_read_tool") is False  # Added by tool decorator
     assert result.content[0].text == "hello"
 
 

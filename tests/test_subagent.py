@@ -44,7 +44,7 @@ async def test_subagent_executes_with_cloned_memory(tracking_memory: TrackingMem
         max_calls=1,
         max_tokens=10,
         memory=tracking_memory,
-        session_id="session",
+        agent_name="session",
         tools=[sub_tool],
     )
 

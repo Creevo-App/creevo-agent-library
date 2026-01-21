@@ -13,7 +13,7 @@ from conftest import FakeTool, QueueLLM, make_text_message, make_tool_use_messag
 
 def test_find_tool_normalizes_name():
     llm = QueueLLM([make_text_message(MessageRole.ASSISTANT, "ok")])
-    memory = FullCompressionMemory()
+    memory = FullCompressionMemory(summarizer_llm=llm)
     tool = FakeTool("my-tool")
     agent = Agent(
         llm=llm,
@@ -21,7 +21,7 @@ def test_find_tool_normalizes_name():
         max_calls=1,
         max_tokens=10,
         memory=memory,
-        session_id="session",
+        agent_name="session",
         tools=[tool],
     )
 
@@ -30,7 +30,7 @@ def test_find_tool_normalizes_name():
 
 def test_cleanup_incomplete_conversation_removes_last_assistant_tool_call():
     llm = QueueLLM([make_text_message(MessageRole.ASSISTANT, "ok")])
-    memory = FullCompressionMemory()
+    memory = FullCompressionMemory(summarizer_llm=llm)
     memory.add_message(make_text_message(MessageRole.USER, "hi"))
     memory.add_message(make_tool_use_message("tool"))
     agent = Agent(
@@ -39,7 +39,7 @@ def test_cleanup_incomplete_conversation_removes_last_assistant_tool_call():
         max_calls=1,
         max_tokens=10,
         memory=memory,
-        session_id="session",
+        agent_name="session",
     )
 
     agent._cleanup_incomplete_conversation()
@@ -56,7 +56,7 @@ def test_emit_progress_outputs_json(capsys):
     assert output.startswith(PROGRESS_PREFIX)
 
     payload = json.loads(output[len(PROGRESS_PREFIX):])
-    assert payload["session_id"] == "session-1"
+    assert payload["agent_name"] == "session-1"
     assert payload["event"] == "event"
     assert payload["message"] == "message"
     assert payload["detail"] == {"step": 1}
@@ -75,14 +75,14 @@ async def test_run_async_executes_tools_and_records_results():
     )
     final_message = Message(role=MessageRole.ASSISTANT, content=[TextBlock(text="done")])
     llm = QueueLLM([tool_use_message, final_message])
-    memory = FullCompressionMemory()
+    memory = FullCompressionMemory(summarizer_llm=llm)
     agent = Agent(
         llm=llm,
         system_prompt="system",
         max_calls=3,
         max_tokens=10,
         memory=memory,
-        session_id="session",
+        agent_name="session",
         tools=[tool_one, tool_two],
     )
 
@@ -108,14 +108,14 @@ async def test_run_async_executes_tools_and_records_results():
 async def test_execute_tools_returns_error_for_missing_tool():
     tool = FakeTool("tool_one")
     llm = QueueLLM([make_text_message(MessageRole.ASSISTANT, "ok")])
-    memory = FullCompressionMemory()
+    memory = FullCompressionMemory(summarizer_llm=llm)
     agent = Agent(
         llm=llm,
         system_prompt="system",
         max_calls=1,
         max_tokens=10,
         memory=memory,
-        session_id="session",
+        agent_name="session",
         tools=[tool],
     )
     tool_uses = [
@@ -136,14 +136,14 @@ async def test_run_async_stop_tool_short_circuits():
     stop_tool = StopTool()
     tool_use_message = make_tool_use_message("stop", tool_use_id="stop-call")
     llm = QueueLLM([tool_use_message])
-    memory = FullCompressionMemory()
+    memory = FullCompressionMemory(summarizer_llm=llm)
     agent = Agent(
         llm=llm,
         system_prompt="system",
         max_calls=2,
         max_tokens=10,
         memory=memory,
-        session_id="session",
+        agent_name="session",
         tools=[stop_tool],
     )
 
@@ -160,14 +160,14 @@ async def test_run_async_stop_tool_short_circuits():
 @pytest.mark.asyncio
 async def test_run_raises_when_called_in_event_loop():
     llm = QueueLLM([make_text_message(MessageRole.ASSISTANT, "ok")])
-    memory = FullCompressionMemory()
+    memory = FullCompressionMemory(summarizer_llm=llm)
     agent = Agent(
         llm=llm,
         system_prompt="system",
         max_calls=1,
         max_tokens=10,
         memory=memory,
-        session_id="session",
+        agent_name="session",
     )
 
     with pytest.raises(RuntimeError, match="await agent.run_async"):

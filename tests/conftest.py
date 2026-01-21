@@ -79,15 +79,32 @@ class FakeLogger(Logger):
     def shutdown(self) -> None:
         self.events.append(("shutdown",))
 
+    def create_child_logger(self, name: str) -> "FakeLogger":
+        self.events.append(("create_child_logger", name))
+        return FakeLogger()
+
+    def end_child(self) -> None:
+        self.events.append(("end_child",))
+
+
+class FakeLLM(LLM):
+    """Minimal LLM for testing that returns a simple summary."""
+    def __init__(self):
+        super().__init__(max_tokens=128, name="fake-llm", provider="test")
+
+    def generate_content(self, system_prompt: str, conversation_history: List[Message], tools: Optional[List[Tool]] = None) -> Message:
+        return Message(role=MessageRole.ASSISTANT, content=[TextBlock(text="[Summary]")])
+
 
 class TrackingMemory(FullCompressionMemory):
-    def __init__(self, max_items: int = 50, messages: Optional[List[Message]] = None):
-        super().__init__(max_items=max_items, messages=messages)
+    def __init__(self, summarizer_llm: Optional[LLM] = None, max_tokens: int = 50000, messages: Optional[List[Message]] = None):
+        llm = summarizer_llm or FakeLLM()
+        super().__init__(summarizer_llm=llm, max_tokens=max_tokens, messages=messages)
         self.clone_called = False
 
     def clone(self) -> "TrackingMemory":
         self.clone_called = True
-        return TrackingMemory(max_items=self.max_items, messages=list(self._messages))
+        return TrackingMemory(summarizer_llm=self.summarizer_llm, max_tokens=self.max_tokens, messages=list(self._messages))
 
 
 def make_text_message(role: MessageRole, text: str) -> Message:

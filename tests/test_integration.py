@@ -28,14 +28,14 @@ async def test_agent_runs_subagent_flow():
         ),
         Message(role=MessageRole.ASSISTANT, content=[TextBlock(text="done")]),
     ])
-    memory = FullCompressionMemory()
+    memory = FullCompressionMemory(summarizer_llm=parent_llm)
     agent = Agent(
         llm=parent_llm,
         system_prompt="system",
         max_calls=2,
         max_tokens=10,
         memory=memory,
-        session_id="session",
+        agent_name="session",
         tools=[sub_tool],
     )
 
@@ -61,14 +61,14 @@ async def test_agent_runs_tool_end_to_end():
         ),
         Message(role=MessageRole.ASSISTANT, content=[TextBlock(text="done")]),
     ])
-    memory = FullCompressionMemory()
+    memory = FullCompressionMemory(summarizer_llm=llm)
     agent = Agent(
         llm=llm,
         system_prompt="system",
         max_calls=2,
         max_tokens=10,
         memory=memory,
-        session_id="session",
+        agent_name="session",
         tools=[tool],
     )
 
@@ -80,14 +80,14 @@ async def test_agent_runs_tool_end_to_end():
 
 def test_agent_run_sync_end_to_end():
     llm = QueueLLM([Message(role=MessageRole.ASSISTANT, content=[TextBlock(text="done")])])
-    memory = FullCompressionMemory()
+    memory = FullCompressionMemory(summarizer_llm=llm)
     agent = Agent(
         llm=llm,
         system_prompt="system",
         max_calls=1,
         max_tokens=10,
         memory=memory,
-        session_id="session",
+        agent_name="session",
         tools=[StopTool()],
     )
 
