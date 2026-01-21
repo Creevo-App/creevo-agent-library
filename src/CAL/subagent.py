@@ -76,6 +76,11 @@ class SubAgentTool(Tool):
         # Clone parent's memory to give sub-agent full context
         sub_memory = self._parent_agent.memory.clone()
 
+        # Create child logger for nested span logging
+        child_logger = None
+        if self._parent_agent.logger:
+            child_logger = self._parent_agent.logger.create_child_logger(self.name)
+
         # Create sub-agent with its own LLM configuration
         sub_agent = Agent(
             llm=self.sub_llm,
@@ -85,11 +90,16 @@ class SubAgentTool(Tool):
             memory=sub_memory,
             session_id=f"{self._parent_agent.session_id}_sub_{self.name}",
             tools=list(self.sub_tools),
-            logger=None,
+            logger=child_logger,
         )
 
         # Run the sub-agent
-        result_message = await sub_agent.run_async(task)
+        try:
+            result_message = await sub_agent.run_async(task)
+        finally:
+            # End the child logger's wrapper span
+            if child_logger:
+                child_logger.end_child()
 
         # Pass through the content directly (ToolResultBlock accepts str or List[ContentBlock])
         content = result_message.content

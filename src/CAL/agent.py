@@ -17,10 +17,10 @@ from .memory import Memory
 
 PROGRESS_PREFIX = "__AGENT_PROGRESS__"
 
-def emit_progress(session_id: str, event: str, message: str, detail: dict = None):
+def emit_progress(agent_name: str, event: str, message: str, detail: dict = None):
     """Emit a progress event to stdout for Node.js to capture and forward to frontend."""
     payload = {
-        "session_id": session_id,
+        "agent_name": agent_name,
         "event": event,
         "message": message,
         "detail": detail or {},
@@ -39,7 +39,7 @@ class Agent:
         max_calls: int,
         max_tokens: int,
         memory: Memory,
-        session_id: str,
+        agent_name: str,
         tools: Optional[List[Tool]] = None,
         logger: Optional[Logger] = None,
     ):
@@ -59,7 +59,7 @@ class Agent:
         self.max_calls = max_calls
         self.max_tokens = max_tokens
         self.memory = memory
-        self.session_id = session_id
+        self.agent_name = agent_name
         self.logger = logger
 
         # Bind SubAgentTools to this agent for context access
@@ -73,7 +73,7 @@ class Agent:
         if self.logger:
             self.logger.log_metadata({
                 "system_prompt": self.system_prompt,
-                "session_id": self.session_id
+                "agent_name": self.agent_name
             })
         
     def register_tool(self, tool: Tool):
@@ -89,6 +89,7 @@ class Agent:
     def conversation_history(self) -> List[Message]:
         """Expose current conversation history."""
         return self.memory.get_history()
+    
     
     def _history_json(self) -> str:
         """Return the serialized conversation history."""
@@ -211,7 +212,7 @@ class Agent:
         # Clean up any incomplete conversation sequences (e.g., from mid-execution saves)
         self._cleanup_incomplete_conversation()
         
-        emit_progress(self.session_id, "start", "Got your request, analyzing your game idea...")
+        emit_progress(self.agent_name, "start", "Got your request, analyzing your game idea...")
         
         # Start Trace
         if self.logger:
@@ -230,7 +231,7 @@ class Agent:
                 
                 # Step 1: Generate LLM response with Timing
                 emit_progress(
-                    self.session_id,
+                    self.agent_name,
                     "llm_start",
                     f"Step {iteration + 1}: Thinking...",
                     {"iteration": iteration}
@@ -247,7 +248,7 @@ class Agent:
                 last_agent_message = agent_message
                 
                 emit_progress(
-                    self.session_id,
+                    self.agent_name,
                     "llm_end",
                     f"Step {iteration + 1}: Planning complete.",
                     {"iteration": iteration}
@@ -283,7 +284,7 @@ class Agent:
                     break
                 
                 emit_progress(
-                    self.session_id,
+                    self.agent_name,
                     "tool_start",
                     f"Step {iteration + 1}: Running tools...",
                     {
@@ -296,7 +297,7 @@ class Agent:
                 tool_results = await self._execute_tools(tool_uses)
                 
                 emit_progress(
-                    self.session_id,
+                    self.agent_name,
                     "tool_end",
                     f"Step {iteration + 1}: Tools complete.",
                     {
@@ -334,7 +335,7 @@ class Agent:
             }.get(workflow_status, "Wrapping up...")
 
             emit_progress(
-                self.session_id,
+                self.agent_name,
                 "complete",
                 status_msg,
                 {"workflow_status": workflow_status}
