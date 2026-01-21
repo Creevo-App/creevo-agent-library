@@ -8,6 +8,7 @@ from CAL.memory import FullCompressionMemory
 from CAL.message import Message, MessageRole
 from CAL.tool import Tool
 
+from conftest import make_text_message
 from test_llm import _is_strictly_alternating
 
 
@@ -34,10 +35,6 @@ def get_test_compression_config() -> CompressionConfig:
         keep_recent_tokens=20,  # Very small to trigger compression
         max_summary_tokens=100,
     )
-
-
-def make_text_message(role: MessageRole, text: str) -> Message:
-    return Message(role=role, content=[TextBlock(text=text)])
 
 
 def make_tool_use_message(tool_name: str, tool_id: str) -> Message:
@@ -320,8 +317,8 @@ ROLE_PATTERNS = [
 ]
 
 
-@pytest.mark.parametrize("pattern_name,roles,max_length", ROLE_PATTERNS)
-def test_compression_role_patterns(pattern_name, roles, max_length):
+@pytest.mark.parametrize("_,roles,__", ROLE_PATTERNS)
+def test_compression_role_patterns(_, roles, __):
     """Parametrized test for various role patterns through compression."""
     memory = FullCompressionMemory(
         summarizer_llm=get_fake_llm(),
