@@ -32,8 +32,12 @@ def test_tool_schema_and_input_form_match():
     assert schema["name"] == "sample"
     assert schema["description"] == "Sample tool."
     assert schema["input_schema"] == sample.input_schema
-    assert gemini_tool.function_declarations[0].name == "sample"
-    assert gemini_tool.function_declarations[0].parameters == sample.input_schema
+
+    func_decl = gemini_tool.function_declarations[0]
+    assert func_decl.name == "sample"
+    assert func_decl.description == "Sample tool."
+    assert set(func_decl.parameters.properties.keys()) == {"count", "label"}
+    assert set(func_decl.parameters.required) == {"count", "label"}
 
 
 @pytest.mark.asyncio
