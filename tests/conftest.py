@@ -11,7 +11,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 # Load .env before any CAL imports to ensure Maxim SDK gets credentials
-load_dotenv(".env")
+load_dotenv(Path(__file__).parent / ".env")
 
 from CAL.content_blocks import TextBlock, ToolResultBlock, ToolUseBlock
 from CAL.llm import LLM
