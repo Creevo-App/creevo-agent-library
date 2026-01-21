@@ -38,15 +38,14 @@ def test_maxim_logger_noop_without_env(monkeypatch):
 
 
 @pytest.mark.integration
-def test_maxim_logger_records_trace_data():
+def test_maxim_logger_records_trace_data(capsys):
     api_key = os.getenv("MAXIM_API_KEY")
     log_repo_id = os.getenv("MAXIM_LOG_REPO_ID")
     if not api_key or not log_repo_id:
         pytest.skip("MAXIM_API_KEY and MAXIM_LOG_REPO_ID must be set")
 
     logger = MaximLogger(agent_name="test-session")
-    if logger.logger_instance is None:
-        pytest.skip("Maxim SDK failed to initialize (may already be initialized)")
+    assert logger.logger_instance is not None
 
     trace_id = logger.start_trace("test-run", "test prompt")
     assert trace_id
@@ -70,6 +69,8 @@ def test_maxim_logger_records_trace_data():
     logger.end_trace(output="done", metadata={"status": "ok"})
     assert logger.root_trace is None
     logger.shutdown()
+    _, err = capsys.readouterr()
+    assert "MaximSDK" not in err
 
 
 # TODO: Add LangSmith trace verification once test repo is available.

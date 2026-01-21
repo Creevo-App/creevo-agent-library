@@ -8,6 +8,8 @@ from CAL.memory import FullCompressionMemory
 from CAL.message import Message, MessageRole
 from CAL.tool import Tool
 
+from test_llm import _is_strictly_alternating
+
 
 class FakeSummarizerLLM(LLM):
     """Fake LLM for testing that returns a predictable summary response."""
@@ -61,6 +63,7 @@ def is_alternating_user_assistant(history: list) -> bool:
     """Check if history alternates between user-like and assistant roles.
     
     Note: USER and TOOL_RESPONSE both map to 'user' in Gemini.
+    Uses _is_strictly_alternating from test_llm.py for the core check.
     """
     def role_category(role: MessageRole) -> str:
         if role in (MessageRole.USER, MessageRole.TOOL_RESPONSE):
@@ -68,10 +71,7 @@ def is_alternating_user_assistant(history: list) -> bool:
         return "assistant"
     
     categories = [role_category(msg.role) for msg in history]
-    for i in range(1, len(categories)):
-        if categories[i] == categories[i - 1]:
-            return False
-    return True
+    return _is_strictly_alternating(categories)
 
 
 def test_full_compression_memory_compresses():
