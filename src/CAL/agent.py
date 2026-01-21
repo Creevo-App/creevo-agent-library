@@ -212,6 +212,10 @@ class Agent:
         # Clean up any incomplete conversation sequences (e.g., from mid-execution saves)
         self._cleanup_incomplete_conversation()
         
+        # Reset retry counters for this run
+        self._malformed_retries = 0
+        self._no_tool_retries = 0
+        
         emit_progress(self.agent_name, "start", "Got your request, analyzing your game idea...")
         
         # Start Trace
