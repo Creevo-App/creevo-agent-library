@@ -568,8 +568,13 @@ Rules for the fields:
     def clone(self) -> 'FullCompressionMemory':
         """Create a copy of this memory with the same history."""
         return FullCompressionMemory(
-            max_items=self.max_items,
-            messages=list(self._messages)
+            summarizer_llm=self.summarizer_llm,
+            max_tokens=self.max_tokens,
+            messages=list(self._messages),
+            compression_config=self.compression_config,
+            logger=self.logger,
+            agent_name=self.agent_name,
+            archiver=self.archiver,
         )
 
     def to_dict(self) -> Dict[str, Any]:

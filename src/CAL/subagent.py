@@ -22,6 +22,7 @@ class SubAgentTool(Tool):
         tools: List[Tool],
         llm: LLM,
         max_calls: int = 10,
+        max_tokens: int = None,
     ):
         self.name = name
         self.description = description
@@ -29,6 +30,7 @@ class SubAgentTool(Tool):
         self.sub_tools = tools
         self.sub_llm = llm
         self.sub_max_calls = max_calls
+        self.sub_max_tokens = max_tokens
         self._parent_agent: Agent = None
         self.input_schema = {
             "type": "object",
@@ -86,7 +88,7 @@ class SubAgentTool(Tool):
             llm=self.sub_llm,
             system_prompt=self.system_prompt,
             max_calls=self.sub_max_calls,
-            max_tokens=self._parent_agent.max_tokens,
+            max_tokens=self.sub_max_tokens if self.sub_max_tokens is not None else self._parent_agent.max_tokens,
             memory=sub_memory,
             session_id=f"{self._parent_agent.session_id}_sub_{self.name}",
             tools=list(self.sub_tools),
@@ -122,7 +124,8 @@ def subagent(
     system_prompt: str,
     tools: List[Tool],
     llm: LLM,
-    max_calls: int = 10
+    max_calls: int = 10,
+    max_tokens: int = None,
 ):
     """
     Decorator to define a sub-agent as a tool.
@@ -131,7 +134,8 @@ def subagent(
         @subagent(
             system_prompt="You are a code reviewer...",
             tools=[review_tool, lint_tool],
-            llm=GeminiLLM(api_key="...", model="gemini-3-pro-preview", max_tokens=8192)
+            llm=GeminiLLM(api_key="...", model="gemini-3-pro-preview", max_tokens=8192),
+            max_tokens=50000
         )
         async def code_reviewer(task: str):
             '''Reviews code for issues.'''
@@ -142,6 +146,7 @@ def subagent(
         tools: List of tools available to the sub-agent
         llm: LLM instance to use for the sub-agent
         max_calls: Maximum tool calls for the sub-agent (default 10)
+        max_tokens: Maximum tokens for sub-agent memory (default: inherit from parent)
 
     Returns:
         SubAgentTool instance
@@ -154,5 +159,6 @@ def subagent(
             tools=tools,
             llm=llm,
             max_calls=max_calls,
+            max_tokens=max_tokens,
         )
     return decorator
