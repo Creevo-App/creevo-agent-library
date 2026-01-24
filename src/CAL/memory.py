@@ -573,8 +573,6 @@ Rules for the fields:
             messages=list(self._messages),
             compression_config=self.compression_config,
             logger=self.logger,
-            agent_name=self.agent_name,
-            archiver=self.archiver,
         )
 
     def to_dict(self) -> Dict[str, Any]:
