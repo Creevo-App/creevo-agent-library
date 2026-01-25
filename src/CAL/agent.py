@@ -212,9 +212,9 @@ class Agent:
         # Clean up any incomplete conversation sequences (e.g., from mid-execution saves)
         self._cleanup_incomplete_conversation()
         
-        # Reset retry counters for this run
-        self._malformed_retries = 0
-        self._no_tool_retries = 0
+        # Unified retry counter for all recoverable errors (LLM errors, malformed calls, no tool calls)
+        max_retries = 10
+        retries = 0
         
         emit_progress(self.agent_name, "start", "Got your request, analyzing your game idea...")
         
@@ -242,11 +242,19 @@ class Agent:
                 )
                 llm_start_time = time.time_ns()
                 
-                agent_message = self.llm.generate_content(
-                    self.system_prompt,
-                    self.memory.get_history(),
-                    self.tools,
-                )
+                # Attempt LLM call with retry on errors
+                try:
+                    agent_message = self.llm.generate_content(
+                        self.system_prompt,
+                        self.memory.get_history(),
+                        self.tools,
+                    )
+                except Exception as e:
+                    retries += 1
+                    if retries < max_retries:
+                        print(f"LLM error: {e}, retry {retries}/{max_retries}", file=sys.stderr)
+                        continue
+                    raise RuntimeError(f"LLM call failed after {max_retries} retries: {e}") from e
                 
                 llm_end_time = time.time_ns()
                 last_agent_message = agent_message
@@ -278,22 +286,19 @@ class Agent:
                         print("Hit MAX_TOKENS, stopping agent loop", file=sys.stderr)
                         break
                     
-                    # Handle MALFORMED_FUNCTION_CALL by retrying (up to 3 times)
+                    # Handle MALFORMED_FUNCTION_CALL by retrying
                     if finish_reason and 'MALFORMED_FUNCTION_CALL' in finish_reason:
-                        malformed_retries = getattr(self, '_malformed_retries', 0)
-                        if malformed_retries < 3:
-                            self._malformed_retries = malformed_retries + 1
-                            print(f"MALFORMED_FUNCTION_CALL detected, retry {self._malformed_retries}/3", file=sys.stderr)
-                            # Don't add malformed message to history, just retry
+                        retries += 1
+                        if retries < max_retries:
+                            print(f"MALFORMED_FUNCTION_CALL detected, retry {retries}/{max_retries}", file=sys.stderr)
                             continue
-                        else:
-                            self.memory.add_message(agent_message)
-                            print("MALFORMED_FUNCTION_CALL: max retries reached, stopping", file=sys.stderr)
-                            workflow_status = "error_malformed_function_call"
-                            break
-                    else:
-                        # Reset retry counter on successful LLM response
-                        self._malformed_retries = 0
+                        self.memory.add_message(agent_message)
+                        print("MALFORMED_FUNCTION_CALL: max retries reached, stopping", file=sys.stderr)
+                        workflow_status = "error_malformed_function_call"
+                        break
+                
+                # Reset retries on successful LLM response with valid finish reason
+                retries = 0
 
                 # Step 2: Add agent message to conversation history
                 self.memory.add_message(agent_message)
@@ -303,11 +308,9 @@ class Agent:
                 
                 # If no tools returned but stop hasn't been called, prompt the LLM to continue
                 if not tool_uses:
-                    no_tool_retries = getattr(self, '_no_tool_retries', 0)
-                    if no_tool_retries < 3:
-                        self._no_tool_retries = no_tool_retries + 1
-                        print(f"No tool calls returned, prompting to continue ({self._no_tool_retries}/3)", file=sys.stderr)
-                        # Add a user message prompting the LLM to use tools
+                    retries += 1
+                    if retries < max_retries:
+                        print(f"No tool calls returned, prompting to continue ({retries}/{max_retries})", file=sys.stderr)
                         prompt_message = Message(
                             role=MessageRole.USER, 
                             content=[TextBlock(text="Continue with your task. You must use tool calls to make progress. When you are done, use the stop tool.")]
@@ -315,13 +318,12 @@ class Agent:
                         self.memory.add_message(prompt_message)
                         iteration += 1
                         continue
-                    else:
-                        print("No tool calls after 3 prompts, stopping", file=sys.stderr)
-                        workflow_status = "completed_no_tools"
-                        break
-                else:
-                    # Reset no-tool retry counter when tools are called
-                    self._no_tool_retries = 0
+                    print("No tool calls after max prompts, stopping", file=sys.stderr)
+                    workflow_status = "completed_no_tools"
+                    break
+                
+                # Reset retries on successful tool use
+                retries = 0
                 
                 emit_progress(
                     self.agent_name,
