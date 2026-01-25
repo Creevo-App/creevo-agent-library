@@ -88,7 +88,7 @@ class SubAgentTool(Tool):
             max_calls=self.sub_max_calls,
             max_tokens=self._parent_agent.max_tokens,
             memory=sub_memory,
-            session_id=f"{self._parent_agent.session_id}_sub_{self.name}",
+            agent_name=f"{self._parent_agent.agent_name}_sub_{self.name}",
             tools=list(self.sub_tools),
             logger=child_logger,
         )
