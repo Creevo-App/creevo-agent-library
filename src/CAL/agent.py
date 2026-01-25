@@ -213,7 +213,7 @@ class Agent:
         self._cleanup_incomplete_conversation()
         
         # Unified retry counter for all recoverable errors (LLM errors, malformed calls, no tool calls)
-        max_retries = 10
+        max_retries = 3
         retries = 0
         
         emit_progress(self.agent_name, "start", "Got your request, analyzing your game idea...")
