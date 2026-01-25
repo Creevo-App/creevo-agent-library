@@ -296,9 +296,6 @@ class Agent:
                         print("MALFORMED_FUNCTION_CALL: max retries reached, stopping", file=sys.stderr)
                         workflow_status = "error_malformed_function_call"
                         break
-                
-                # Reset retries on successful LLM response with valid finish reason
-                retries = 0
 
                 # Step 2: Add agent message to conversation history
                 self.memory.add_message(agent_message)
