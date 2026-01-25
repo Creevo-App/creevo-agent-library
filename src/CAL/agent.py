@@ -213,7 +213,7 @@ class Agent:
         self._cleanup_incomplete_conversation()
         
         # Unified retry counter for all recoverable errors (LLM errors, malformed calls, no tool calls)
-        max_retries = 3
+        max_retries = 10
         retries = 0
         
         emit_progress(self.agent_name, "start", "Got your request, analyzing your game idea...")
@@ -297,8 +297,6 @@ class Agent:
                         workflow_status = "error_malformed_function_call"
                         break
                 
-                # Reset retries on successful LLM response with valid finish reason
-                retries = 0
 
                 # Step 2: Add agent message to conversation history
                 self.memory.add_message(agent_message)
