@@ -66,6 +66,7 @@ def test_emit_progress_outputs_json(capsys):
 async def test_run_async_executes_tools_and_records_results():
     tool_one = FakeTool("tool_one")
     tool_two = FakeTool("tool_two")
+    stop_tool = StopTool()
     tool_use_message = Message(
         role=MessageRole.ASSISTANT,
         content=[
@@ -73,8 +74,11 @@ async def test_run_async_executes_tools_and_records_results():
             ToolUseBlock(id="tool-2", name="tool_two", input={"text": "two"}),
         ],
     )
-    final_message = Message(role=MessageRole.ASSISTANT, content=[TextBlock(text="done")])
-    llm = QueueLLM([tool_use_message, final_message])
+    stop_message = Message(
+        role=MessageRole.ASSISTANT,
+        content=[ToolUseBlock(id="stop-1", name="stop", input={})],
+    )
+    llm = QueueLLM([tool_use_message, stop_message])
     memory = FullCompressionMemory(summarizer_llm=llm)
     agent = Agent(
         llm=llm,
@@ -83,12 +87,12 @@ async def test_run_async_executes_tools_and_records_results():
         max_tokens=10,
         memory=memory,
         agent_name="session",
-        tools=[tool_one, tool_two],
+        tools=[tool_one, tool_two, stop_tool],
     )
 
     result = await agent.run_async("prompt")
 
-    assert result.content[0].text == "done"
+    assert result.content[0].name == "stop"
 
     history = memory.get_history()
     assert [message.role for message in history] == [
@@ -96,6 +100,7 @@ async def test_run_async_executes_tools_and_records_results():
         MessageRole.ASSISTANT,
         MessageRole.USER,
         MessageRole.ASSISTANT,
+        MessageRole.USER,
     ]
     tool_results = history[2].content
     assert tool_results[0].name == "tool_one"
