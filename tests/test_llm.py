@@ -143,7 +143,7 @@ def test_anthropic_vertex_llm_formats_history_and_extracts_usage():
 
     # Verify usage extraction
     assert message.usage == {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
-    assert message.metadata["finish_reason"] == "tool_use"
+    assert message.metadata["finish_reason"] == "TOOL_USE"
 
 
 def test_gemini_llm_formats_history_and_extracts_usage():

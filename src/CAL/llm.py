@@ -150,8 +150,9 @@ class AnthropicVertexLLM(LLM):
                 "total_tokens": (getattr(response.usage, "input_tokens", 0) or 0) + (getattr(response.usage, "output_tokens", 0) or 0),
             }
 
-        # Extract finish reason
-        finish_reason = getattr(response, "stop_reason", None)
+        # Extract finish reason (convert to uppercase to match expected format)
+        raw_stop_reason = getattr(response, "stop_reason", None)
+        finish_reason = raw_stop_reason.upper() if raw_stop_reason else None
 
         if os.getenv("DEBUG_LLM_RESPONSE") == "true":
             print(f"Usage metadata: {usage}", file=sys.stderr)
