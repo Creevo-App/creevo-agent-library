@@ -241,6 +241,76 @@ class TestToolLoopPatternCompression:
     sequences through compression.
     """
 
+    def test_compression_breakpoint_does_not_split_tool_use_and_result(self):
+        """Test that compression never splits tool_use from its tool_result.
+        
+        Anthropic API requires that any message containing a tool_result must
+        immediately follow the assistant message with the corresponding tool_use.
+        If compression summarizes the tool_use but keeps the tool_result in recent
+        messages, the API will reject with:
+        "unexpected tool_use_id found in tool_result blocks"
+        
+        This test creates a scenario where the natural token-based breakpoint
+        would fall between tool_use and tool_result, and verifies the fix
+        backs up the breakpoint to include both.
+        """
+        # Token estimates (1 token ~= 4 chars):
+        # - tool_use "read_file({})" ~= 3 tokens
+        # - tool_result with 20 chars ~= 5 tokens
+        # - final with 40 chars ~= 10 tokens
+        #
+        # With keep_recent_tokens=16:
+        # - final (10) fits, total=10
+        # - tool_result (5) fits, total=15
+        # - tool_use (3) would make total=18 > 16, so breakpoint falls AFTER tool_use
+        #
+        # This causes tool_result to appear in "recent" without its tool_use.
+        memory = FullCompressionMemory(
+            summarizer_llm=get_fake_llm(),
+            max_tokens=100,
+            compression_config=CompressionConfig(
+                keep_recent_tokens=16,  # Fits tool_result + final (15), but not + tool_use (18)
+            ),
+        )
+
+        # Build history that triggers compression with breakpoint at the right spot
+        # [0] USER - large, will be initial message kept
+        memory.add_message(make_text_message(MessageRole.USER, "a" * 200))  # ~50 tokens
+        # [1] ASSISTANT - large, will be compressed
+        memory.add_message(make_text_message(MessageRole.ASSISTANT, "b" * 200))  # ~50 tokens
+        # [2] USER - will be compressed
+        memory.add_message(make_text_message(MessageRole.USER, "c" * 40))  # ~10 tokens
+
+        # At this point: ~110 tokens, compression triggers on next add
+        # [3] TOOL_USE - should NOT be separated from result
+        memory.add_message(make_tool_use_message("read_file", "tool_123"))  # ~3 tokens
+        # [4] TOOL_RESULT - fits in keep_recent with final
+        memory.add_message(make_tool_result_message("read_file", "tool_123", "x" * 20))  # ~5 tokens
+        # [5] Final message - fits in keep_recent
+        memory.add_message(make_text_message(MessageRole.ASSISTANT, "y" * 40))  # ~10 tokens
+
+        history = memory.get_history()
+
+        # Verify compression occurred
+        compressed_msgs = [m for m in history if m.metadata.get("compressed")]
+        assert len(compressed_msgs) >= 1, "Compression should have occurred"
+
+        # Check that no message with tool_result lacks a preceding tool_use
+        for i, msg in enumerate(history):
+            if isinstance(msg.content, list):
+                has_tool_result = any(isinstance(b, ToolResultBlock) for b in msg.content)
+                if has_tool_result:
+                    # This message has a tool_result - previous must have tool_use
+                    assert i > 0, "tool_result cannot be first message"
+                    prev_msg = history[i - 1]
+                    has_tool_use = False
+                    if isinstance(prev_msg.content, list):
+                        has_tool_use = any(isinstance(b, ToolUseBlock) for b in prev_msg.content)
+                    assert has_tool_use, (
+                        f"Message {i} has tool_result but message {i-1} has no tool_use. "
+                        "Compression split a tool_use/tool_result pair."
+                    )
+
     def test_tool_loop_compression_preserves_structure(self):
         """Test compression of tool usage patterns."""
         memory = FullCompressionMemory(

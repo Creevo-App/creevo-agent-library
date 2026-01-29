@@ -64,12 +64,86 @@ class FakeClient:
         self.models = FakeModels(response)
 
 
-def test_anthropic_vertex_llm_returns_stub_message():
-    llm = AnthropicVertexLLM(api_key="key", model="model", max_tokens=8)
-    message = llm.generate_content("system", [], tools=None)
+class DummyAnthropicTextBlock:
+    def __init__(self, text: str):
+        self.type = "text"
+        self.text = text
 
+
+class DummyAnthropicToolUseBlock:
+    def __init__(self, id: str, name: str, input: dict):
+        self.type = "tool_use"
+        self.id = id
+        self.name = name
+        self.input = input
+
+
+class DummyAnthropicUsage:
+    def __init__(self, input_tokens: int, output_tokens: int):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
+class DummyAnthropicResponse:
+    def __init__(self, content, usage=None, stop_reason="end_turn"):
+        self.content = content
+        self.usage = usage
+        self.stop_reason = stop_reason
+
+
+class FakeAnthropicMessages:
+    def __init__(self, response: DummyAnthropicResponse):
+        self.calls = []
+        self._response = response
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._response
+
+
+class FakeAnthropicClient:
+    def __init__(self, response: DummyAnthropicResponse):
+        self.messages = FakeAnthropicMessages(response)
+
+
+def test_anthropic_vertex_llm_formats_history_and_extracts_usage():
+    response = DummyAnthropicResponse(
+        content=[
+            DummyAnthropicTextBlock(text="Hello!"),
+            DummyAnthropicToolUseBlock(id="tool-1", name="my_tool", input={"arg": "value"}),
+        ],
+        usage=DummyAnthropicUsage(input_tokens=10, output_tokens=20),
+        stop_reason="tool_use",
+    )
+    llm = AnthropicVertexLLM(project_id="test-project", region="global", model="claude-opus-4-5@20251101", max_tokens=8)
+    llm.client = FakeAnthropicClient(response)
+
+    history = [
+        Message(role=MessageRole.USER, content="hello"),
+        Message(role=MessageRole.ASSISTANT, content=[TextBlock(text="hi")]),
+        Message(role=MessageRole.USER, content="request tool"),
+    ]
+
+    message = llm.generate_content("system prompt", history, tools=None)
+
+    # Verify the call was made with correct parameters
+    call = llm.client.messages.calls[0]
+    assert call["model"] == "claude-opus-4-5@20251101"
+    assert call["system"] == "system prompt"
+    assert call["max_tokens"] == 8
+    assert len(call["messages"]) == 3
+
+    # Verify response parsing
     assert message.role == MessageRole.ASSISTANT
-    assert message.content[0].text == "Hi"
+    assert len(message.content) == 2
+    assert message.content[0].text == "Hello!"
+    assert isinstance(message.content[1], ToolUseBlock)
+    assert message.content[1].name == "my_tool"
+    assert message.content[1].input == {"arg": "value"}
+
+    # Verify usage extraction
+    assert message.usage == {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+    assert message.metadata["finish_reason"] == "TOOL_USE"
 
 
 def test_gemini_llm_formats_history_and_extracts_usage():
