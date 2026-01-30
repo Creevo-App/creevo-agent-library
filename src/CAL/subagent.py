@@ -78,6 +78,19 @@ class SubAgentTool(Tool):
         # Clone parent's memory to give sub-agent full context
         sub_memory = self._parent_agent.memory.clone()
 
+        # Apply sub-agent's max_tokens to the cloned memory for correct compression threshold
+        effective_max_tokens = self.sub_max_tokens if self.sub_max_tokens is not None else self._parent_agent.max_tokens
+        if hasattr(sub_memory, 'max_tokens'):
+            sub_memory.max_tokens = effective_max_tokens
+
+        # Update agent_name and archiver to use sub-agent's identity (not parent's)
+        sub_agent_name = f"{self._parent_agent.agent_name}_sub_{self.name}"
+        if hasattr(sub_memory, 'agent_name'):
+            sub_memory.agent_name = sub_agent_name
+        if hasattr(sub_memory, 'archiver'):
+            from .compression import CompressionArchiver
+            sub_memory.archiver = CompressionArchiver(agent_name=sub_agent_name)
+
         # Create child logger for nested span logging
         child_logger = None
         if self._parent_agent.logger:
@@ -88,9 +101,9 @@ class SubAgentTool(Tool):
             llm=self.sub_llm,
             system_prompt=self.system_prompt,
             max_calls=self.sub_max_calls,
-            max_tokens=self.sub_max_tokens if self.sub_max_tokens is not None else self._parent_agent.max_tokens,
+            max_tokens=effective_max_tokens,
             memory=sub_memory,
-            agent_name=f"{self._parent_agent.agent_name}_sub_{self.name}",
+            agent_name=sub_agent_name,
             tools=list(self.sub_tools),
             logger=child_logger,
         )
