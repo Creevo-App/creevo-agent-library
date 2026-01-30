@@ -22,6 +22,7 @@ class SubAgentTool(Tool):
         tools: List[Tool],
         llm: LLM,
         max_calls: int = 10,
+        max_tokens: int = None,
     ):
         self.name = name
         self.description = description
@@ -29,6 +30,7 @@ class SubAgentTool(Tool):
         self.sub_tools = tools
         self.sub_llm = llm
         self.sub_max_calls = max_calls
+        self.sub_max_tokens = max_tokens
         self._parent_agent: Agent = None
         self.input_schema = {
             "type": "object",
@@ -76,6 +78,19 @@ class SubAgentTool(Tool):
         # Clone parent's memory to give sub-agent full context
         sub_memory = self._parent_agent.memory.clone()
 
+        # Apply sub-agent's max_tokens to the cloned memory for correct compression threshold
+        effective_max_tokens = self.sub_max_tokens if self.sub_max_tokens is not None else self._parent_agent.max_tokens
+        if hasattr(sub_memory, 'max_tokens'):
+            sub_memory.max_tokens = effective_max_tokens
+
+        # Update agent_name and archiver to use sub-agent's identity (not parent's)
+        sub_agent_name = f"{self._parent_agent.agent_name}_sub_{self.name}"
+        if hasattr(sub_memory, 'agent_name'):
+            sub_memory.agent_name = sub_agent_name
+        if hasattr(sub_memory, 'archiver'):
+            from .compression import CompressionArchiver
+            sub_memory.archiver = CompressionArchiver(agent_name=sub_agent_name)
+
         # Create child logger for nested span logging
         child_logger = None
         if self._parent_agent.logger:
@@ -86,9 +101,9 @@ class SubAgentTool(Tool):
             llm=self.sub_llm,
             system_prompt=self.system_prompt,
             max_calls=self.sub_max_calls,
-            max_tokens=self._parent_agent.max_tokens,
+            max_tokens=effective_max_tokens,
             memory=sub_memory,
-            agent_name=f"{self._parent_agent.agent_name}_sub_{self.name}",
+            agent_name=sub_agent_name,
             tools=list(self.sub_tools),
             logger=child_logger,
         )
@@ -122,7 +137,8 @@ def subagent(
     system_prompt: str,
     tools: List[Tool],
     llm: LLM,
-    max_calls: int = 10
+    max_calls: int = 10,
+    max_tokens: int = None,
 ):
     """
     Decorator to define a sub-agent as a tool.
@@ -131,7 +147,8 @@ def subagent(
         @subagent(
             system_prompt="You are a code reviewer...",
             tools=[review_tool, lint_tool],
-            llm=GeminiLLM(api_key="...", model="gemini-3-pro-preview", max_tokens=8192)
+            llm=GeminiLLM(api_key="...", model="gemini-3-pro-preview", max_tokens=8192),
+            max_tokens=50000
         )
         async def code_reviewer(task: str):
             '''Reviews code for issues.'''
@@ -142,6 +159,7 @@ def subagent(
         tools: List of tools available to the sub-agent
         llm: LLM instance to use for the sub-agent
         max_calls: Maximum tool calls for the sub-agent (default 10)
+        max_tokens: Maximum tokens for sub-agent memory (default: inherit from parent)
 
     Returns:
         SubAgentTool instance
@@ -154,5 +172,6 @@ def subagent(
             tools=tools,
             llm=llm,
             max_calls=max_calls,
+            max_tokens=max_tokens,
         )
     return decorator

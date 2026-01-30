@@ -575,13 +575,19 @@ Rules for the fields:
         return history
 
     def clone(self) -> 'FullCompressionMemory':
-        """Create a copy of this memory with the same history."""
+        """Create a copy of this memory with the same history.
+
+        Note: The archiver is NOT shared - each clone gets its own fresh archiver
+        to prevent state pollution between parent and cloned memory instances.
+        """
         return FullCompressionMemory(
             summarizer_llm=self.summarizer_llm,
             max_tokens=self.max_tokens,
             messages=list(self._messages),
             compression_config=self.compression_config,
             logger=self.logger,
+            agent_name=self.agent_name,
+            archiver=None,  # Don't share archiver - let clone create its own
         )
 
     def to_dict(self) -> Dict[str, Any]:
