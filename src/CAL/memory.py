@@ -221,6 +221,15 @@ class FullCompressionMemory(Memory):
         
         recent_messages = self._messages[breakpoint_idx:]
         
+        # Ensure recent_messages doesn't start with a tool_result, as this breaks
+        # Anthropic's requirement that tool_results must follow tool_use.
+        def _has_tool_result(msg: Message) -> bool:
+            return isinstance(msg.content, list) and any(isinstance(b, ToolResultBlock) for b in msg.content)
+        
+        while breakpoint_idx > 1 and breakpoint_idx < len(self._messages) and _has_tool_result(self._messages[breakpoint_idx]):
+            breakpoint_idx -= 1
+            recent_messages = self._messages[breakpoint_idx:]
+        
         # Ensure we keep at least 1 recent message if possible
         if not recent_messages and len(self._messages) > 1:
             print(f"[Memory] Compress fallback: keeping last message (exceeded keep_recent_tokens={keep_recent_tokens})", file=sys.stderr)

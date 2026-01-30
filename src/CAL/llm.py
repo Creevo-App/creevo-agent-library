@@ -11,6 +11,7 @@ import sys
 from google import genai
 from google.genai import types
 from google.genai.types import HttpOptions
+from anthropic import AnthropicVertex
 from dotenv import load_dotenv
 from .tool import Tool
 
@@ -50,28 +51,27 @@ class LLM(ABC):
 
 
 class AnthropicVertexLLM(LLM):
-    """Anthropic Vertex LLM implementation (stub)"""
+    """Anthropic Vertex LLM implementation"""
     
-    def __init__(self, api_key: str, model: str, max_tokens: int):
+    def __init__(self, project_id: str, region: str, model: str, max_tokens: int):
         """
         Initialize the Anthropic Vertex LLM.
         
         Args:
-            api_key: API key for authentication
-            model: Model name to use
+            project_id: GCP project ID
+            region: Vertex AI region (e.g., "global", "us-east5")
+            model: Model name to use (e.g., "claude-opus-4-5@20251101")
             max_tokens: Maximum number of tokens for generation
         """
         super().__init__(max_tokens, name=model, provider="Anthropic")
-        if not api_key:
-            self.api_key = os.getenv("GEMINI_API_KEY")
-        else:
-            self.api_key = api_key
-
+        self.project_id = project_id
+        self.region = region
         self.model = model
+        self.client = AnthropicVertex(project_id=project_id, region=region)
     
     def generate_content(self, system_prompt: str, conversation_history: List[Message], tools: Optional[List[Tool]] = None) -> Message:
         """
-        Generate content based on conversation history (stub implementation).
+        Generate content based on conversation history.
         
         Args:
             system_prompt: System prompt for the LLM
@@ -79,12 +79,90 @@ class AnthropicVertexLLM(LLM):
             tools: Optional list of tools available to the LLM
             
         Returns:
-            Generated message with stub content "Hi"
+            Generated message from Anthropic Vertex API
         """
-        # Stub implementation - returns a simple message
+        # Format the conversation history for Anthropic API
+        formatted_history = []
+        for message in conversation_history:
+            parts = []
+            if isinstance(message.content, str):
+                parts.append({"type": "text", "text": message.content})
+            else:
+                for block in message.content:
+                    parts.append(block.claude_content_form())
+            
+            # Map CAL roles to Anthropic roles
+            if message.role == MessageRole.USER:
+                role = "user"
+            elif message.role == MessageRole.ASSISTANT:
+                role = "assistant"
+            elif message.role == MessageRole.TOOL_RESPONSE:
+                role = "user"  # Tool results are sent as user messages in Anthropic
+            else:
+                role = "user"
+            
+            # Merge with previous message if role is the same
+            if formatted_history and formatted_history[-1]["role"] == role:
+                formatted_history[-1]["content"].extend(parts)
+            else:
+                formatted_history.append({"role": role, "content": parts})
+
+        # Build request parameters
+        request_params = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "system": system_prompt,
+            "messages": formatted_history,
+        }
+        
+        # Add tools if provided
+        if tools:
+            request_params["tools"] = [tool.get_schema() for tool in tools]
+
+        if os.getenv("DEBUG_LLM_RESPONSE") == "true":
+            print(f"[LLM] Requesting model: {self.model}", file=sys.stderr)
+
+        response = self.client.messages.create(**request_params)
+
+        if os.getenv("DEBUG_LLM_RESPONSE") == "true":
+            print(f"[LLM] Response: {response}", file=sys.stderr)
+
+        # Parse response content blocks
+        content_blocks = []
+        for block in response.content:
+            if block.type == "text":
+                content_blocks.append(TextBlock(text=block.text))
+            elif block.type == "tool_use":
+                content_blocks.append(
+                    ToolUseBlock(
+                        id=block.id,
+                        name=block.name,
+                        input=block.input,
+                    )
+                )
+
+        # Extract token usage
+        usage = {}
+        if hasattr(response, "usage") and response.usage:
+            usage = {
+                "prompt_tokens": getattr(response.usage, "input_tokens", 0) or 0,
+                "completion_tokens": getattr(response.usage, "output_tokens", 0) or 0,
+                "total_tokens": (getattr(response.usage, "input_tokens", 0) or 0) + (getattr(response.usage, "output_tokens", 0) or 0),
+            }
+
+        # Extract finish reason (convert to uppercase to match expected format)
+        raw_stop_reason = getattr(response, "stop_reason", None)
+        finish_reason = raw_stop_reason.upper() if raw_stop_reason else None
+
+        if os.getenv("DEBUG_LLM_RESPONSE") == "true":
+            print(f"Usage metadata: {usage}", file=sys.stderr)
+            print(f"Finish reason: {finish_reason}", file=sys.stderr)
+
         return Message(
             role=MessageRole.ASSISTANT,
-            content=[TextBlock(text="Hi")]
+            content=content_blocks,
+            usage=usage,
+            metadata={"finish_reason": finish_reason} if finish_reason else {},
         )
     
 class GeminiLLM(LLM):

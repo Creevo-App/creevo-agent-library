@@ -168,7 +168,7 @@ def clone(self) -> 'FullCompressionMemory':
 Sub-agents can spawn their own sub-agents by including subagent tools in their `tools` list:
 
 ```python
-@subagent(system_prompt="...", tools=[basic_tool])
+	@subagent(system_prompt="...", tools=[basic_tool])
 async def inner_agent(task: str):
     pass
 
