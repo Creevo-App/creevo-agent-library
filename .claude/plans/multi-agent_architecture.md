@@ -1,23 +1,8 @@
----
-name: Multi-Agent Architecture
-overview: Add a subagent primitive to CAL that users import to define specialized sub-agent tools. Each subagent is its own distinct tool with predefined system_prompt and tools. When called, it inherits the parent's full context, runs its own loop, and returns results.
-todos:
-  - id: memory-clone
-    content: Add clone() method to FullCompressionMemory
-    status: completed
-  - id: subagent-class
-    content: Create SubAgentTool class in tool.py
-    status: completed
-  - id: subagent-decorator
-    content: Create subagent() decorator for easy definition
-    status: completed
-  - id: exports
-    content: Update __init__.py exports
-    status: completed
-isProject: false
----
-
 # Multi-Agent Architecture for CAL
+
+## Status
+
+All tasks completed.
 
 ## Architecture Overview
 
@@ -75,7 +60,7 @@ When the LLM calls `code_reviewer(task="Review the auth module")`, the subagent:
 
 ## Implementation
 
-### 1. Add SubAgentTool class to [src/CAL/tool.py](src/CAL/tool.py)
+### 1. Add SubAgentTool class to src/CAL/tool.py
 
 ```python
 class SubAgentTool(Tool):
@@ -112,7 +97,7 @@ class SubAgentTool(Tool):
         # 4. Extract and return final response
 ```
 
-### 2. Add subagent decorator to [src/CAL/tool.py](src/CAL/tool.py)
+### 2. Add subagent decorator to src/CAL/tool.py
 
 ```python
 def subagent(
@@ -143,7 +128,7 @@ def subagent(
     return decorator
 ```
 
-### 3. Modify Agent to bind subagent tools in [src/CAL/agent.py](src/CAL/agent.py)
+### 3. Modify Agent to bind subagent tools in src/CAL/agent.py
 
 In `Agent.__init__`, bind any `SubAgentTool` instances to self:
 
@@ -153,7 +138,7 @@ for tool in self.tools:
         tool.bind_parent(self)
 ```
 
-### 4. Add clone() to FullCompressionMemory in [src/CAL/memory.py](src/CAL/memory.py)
+### 4. Add clone() to FullCompressionMemory in src/CAL/memory.py
 
 ```python
 def clone(self) -> 'FullCompressionMemory':
@@ -169,7 +154,7 @@ def clone(self) -> 'FullCompressionMemory':
 Sub-agents can spawn their own sub-agents by including subagent tools in their `tools` list:
 
 ```python
-	@subagent(system_prompt="...", tools=[basic_tool])
+@subagent(system_prompt="...", tools=[basic_tool])
 async def inner_agent(task: str):
     pass
 
@@ -178,9 +163,9 @@ async def outer_agent(task: str):
     pass
 ```
 
-## Files to Modify
+## Files Modified
 
-- [src/CAL/tool.py](src/CAL/tool.py) - Add `SubAgentTool` class and `subagent` decorator
-- [src/CAL/agent.py](src/CAL/agent.py) - Bind subagent tools to parent in `__init__`
-- [src/CAL/memory.py](src/CAL/memory.py) - Add `clone()` method
-- [src/CAL/**init**.py](src/CAL/__init__.py) - Export `subagent` and `SubAgentTool`
+- `src/CAL/tool.py` - Add `SubAgentTool` class and `subagent` decorator
+- `src/CAL/agent.py` - Bind subagent tools to parent in `__init__`
+- `src/CAL/memory.py` - Add `clone()` method
+- `src/CAL/__init__.py` - Export `subagent` and `SubAgentTool`
