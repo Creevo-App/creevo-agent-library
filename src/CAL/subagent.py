@@ -105,6 +105,11 @@ class SubAgentTool(Tool):
         if self._parent_agent.logger:
             child_logger = self._parent_agent.logger.create_child_logger(self.name)
 
+        # Update sub_memory's logger so compression events are logged under the subagent,
+        # not the parent agent. The cloned memory inherits the parent's logger by default.
+        if hasattr(sub_memory, 'logger'):
+            sub_memory.logger = child_logger
+
         # Create sub-agent with its own LLM configuration
         sub_agent = Agent(
             llm=self.sub_llm,
