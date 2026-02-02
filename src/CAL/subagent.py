@@ -78,9 +78,17 @@ class SubAgentTool(Tool):
         # Clone parent's memory to give sub-agent full context
         sub_memory = self._parent_agent.memory.clone()
 
-        # Apply sub-agent's max_tokens to the cloned memory for correct compression threshold
-        # Use parent memory's max_tokens (compression threshold), not parent agent's max_tokens (LLM response limit)
-        effective_max_tokens = self.sub_max_tokens if self.sub_max_tokens is not None else self._parent_agent.memory.max_tokens
+        # Apply sub-agent's max_tokens to the cloned memory for correct compression threshold.
+        # Priority: 1) explicit sub_max_tokens, 2) parent memory's max_tokens (compression threshold),
+        # 3) fallback to parent agent's max_tokens (for custom Memory implementations without max_tokens).
+        # Note: The abstract Memory base class doesn't define max_tokens—only FullCompressionMemory does.
+        # Custom Memory implementations may omit it, so we check with hasattr before accessing.
+        if self.sub_max_tokens is not None:
+            effective_max_tokens = self.sub_max_tokens
+        elif hasattr(self._parent_agent.memory, 'max_tokens'):
+            effective_max_tokens = self._parent_agent.memory.max_tokens
+        else:
+            effective_max_tokens = self._parent_agent.max_tokens
         if hasattr(sub_memory, 'max_tokens'):
             sub_memory.max_tokens = effective_max_tokens
 
