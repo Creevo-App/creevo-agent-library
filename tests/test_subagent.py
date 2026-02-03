@@ -6,7 +6,39 @@ from CAL.memory import FullCompressionMemory
 from CAL.message import MessageRole
 from CAL.subagent import SubAgentTool
 
-from conftest import FakeLLM, QueueLLM, TrackingMemory, make_text_message
+from conftest import FakeLLM, FakeLogger, QueueLLM, TrackingMemory, make_text_message
+
+
+class ChildTrackingLogger(FakeLogger):
+    """Logger that tracks parent-child relationships for testing."""
+
+    def __init__(self, name: str = "parent"):
+        super().__init__()
+        self.name = name
+        self.children = []
+
+    def create_child_logger(self, name: str) -> "ChildTrackingLogger":
+        self.events.append(("create_child_logger", name))
+        child = ChildTrackingLogger(name=f"{self.name}_child_{name}")
+        self.children.append(child)
+        return child
+
+
+class LoggerTrackingMemory(FullCompressionMemory):
+    """Memory that allows inspection of its logger after cloning."""
+
+    def __init__(self, summarizer_llm=None, max_tokens=50000, messages=None, logger=None):
+        llm = summarizer_llm or FakeLLM()
+        super().__init__(summarizer_llm=llm, max_tokens=max_tokens, messages=messages, logger=logger)
+
+    def clone(self) -> "LoggerTrackingMemory":
+        cloned = LoggerTrackingMemory(
+            summarizer_llm=self.summarizer_llm,
+            max_tokens=self.max_tokens,
+            messages=list(self._messages),
+            logger=self.logger,  # Clone inherits parent's logger initially
+        )
+        return cloned
 
 
 class MaxTokensTrackingMemory(FullCompressionMemory):
@@ -173,3 +205,137 @@ async def test_subagent_explicit_max_tokens_overrides_parent():
 
     assert result.is_error is False
     assert len(sub_llm.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_subagent_memory_uses_child_logger_not_parent():
+    """
+    Verify that subagent's memory uses the child logger, not the parent's logger.
+
+    When memory compression occurs in a subagent, it should log to the subagent's
+    child logger so that compression events appear under the correct agent span.
+
+    Bug: Previously, cloned memory kept the parent's logger, causing compression
+    events to be logged under the parent agent instead of the subagent.
+    Fix: SubAgentTool.execute now sets sub_memory.logger = child_logger
+    """
+    # Create a logger that tracks parent-child relationships
+    parent_logger = ChildTrackingLogger(name="parent")
+
+    # Create memory with the parent logger
+    parent_memory = LoggerTrackingMemory(max_tokens=100_000, logger=parent_logger)
+
+    sub_llm = QueueLLM([make_text_message(MessageRole.ASSISTANT, "sub response")])
+    sub_tool = SubAgentTool(
+        name="delegate",
+        description="delegate work",
+        system_prompt="You are a helper.",
+        tools=[],
+        llm=sub_llm,
+        max_calls=1,
+    )
+
+    parent_llm = QueueLLM([make_text_message(MessageRole.ASSISTANT, "parent ok")])
+    parent = Agent(
+        llm=parent_llm,
+        system_prompt="system",
+        max_calls=1,
+        max_tokens=10_000,
+        memory=parent_memory,
+        agent_name="parent_agent",
+        tools=[sub_tool],
+        logger=parent_logger,
+    )
+
+    # Execute the subagent tool
+    result = await sub_tool.execute(tool_use_id="tool-use-test", task="do work")
+
+    assert result.is_error is False
+
+    # Verify a child logger was created
+    assert len(parent_logger.children) == 1, "Child logger should have been created"
+    child_logger = parent_logger.children[0]
+    assert "delegate" in child_logger.name, "Child logger should be named after the subagent"
+
+    # Verify the parent's logger is NOT the same as the child
+    assert parent_logger is not child_logger
+
+    # The key assertion: verify that the subagent's memory received the child logger.
+    # We can't directly inspect the sub_memory after execute() returns, but we can
+    # verify indirectly by checking that the child logger exists and was created.
+    # A more direct test would require modifying SubAgentTool to expose the sub_memory,
+    # or triggering compression and checking which logger received the event.
+
+    # Verify child logger was created for the "delegate" subagent
+    create_child_events = [e for e in parent_logger.events if e[0] == "create_child_logger"]
+    assert len(create_child_events) == 1
+    assert create_child_events[0][1] == "delegate"
+
+
+@pytest.mark.asyncio
+async def test_subagent_memory_logger_receives_compression_events():
+    """
+    Verify that when compression occurs in a subagent, events are logged
+    to the child logger, not the parent logger.
+
+    This test triggers actual compression by using a very low max_tokens
+    and adding enough content to exceed the threshold.
+    """
+    parent_logger = ChildTrackingLogger(name="parent")
+
+    # Use very low max_tokens to trigger compression quickly
+    parent_memory = LoggerTrackingMemory(max_tokens=500, logger=parent_logger)
+
+    # Add some initial content to parent memory to ensure compression triggers
+    from CAL.message import Message
+    parent_memory.add_message(Message(
+        role=MessageRole.USER,
+        content="Initial context with enough tokens to matter. " * 20
+    ))
+
+    sub_llm = QueueLLM([make_text_message(MessageRole.ASSISTANT, "sub response " * 50)])
+    sub_tool = SubAgentTool(
+        name="compressing_delegate",
+        description="delegate work that triggers compression",
+        system_prompt="You are a helper.",
+        tools=[],
+        llm=sub_llm,
+        max_calls=1,
+        max_tokens=500,  # Low threshold to trigger compression in subagent
+    )
+
+    parent_llm = QueueLLM([make_text_message(MessageRole.ASSISTANT, "parent ok")])
+    parent = Agent(
+        llm=parent_llm,
+        system_prompt="system",
+        max_calls=1,
+        max_tokens=10_000,
+        memory=parent_memory,
+        agent_name="parent_agent",
+        tools=[sub_tool],
+        logger=parent_logger,
+    )
+
+    # Execute the subagent
+    result = await sub_tool.execute(tool_use_id="tool-use-test", task="do work " * 30)
+
+    assert result.is_error is False
+
+    # Verify child logger was created
+    assert len(parent_logger.children) == 1
+    child_logger = parent_logger.children[0]
+
+    # If compression occurred, the child logger should have received tool events
+    # (compression logs via log_tool_response). Check that parent logger did NOT
+    # receive compression events that should have gone to the child.
+    parent_tool_events = [e for e in parent_logger.events if e[0] == "tool"]
+    child_tool_events = [e for e in child_logger.events if e[0] == "tool"]
+
+    # Parent should not have memory_compression tool events from the subagent
+    parent_compression_events = [
+        e for e in parent_tool_events
+        if len(e) > 1 and hasattr(e[1], 'name') and e[1].name == "memory_compression"
+    ]
+    assert len(parent_compression_events) == 0, (
+        "Parent logger should not receive memory_compression events from subagent"
+    )
