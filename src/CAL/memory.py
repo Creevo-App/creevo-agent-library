@@ -594,6 +594,12 @@ Rules for the fields:
 
         Note: The archiver is NOT shared - each clone gets its own fresh archiver
         to prevent state pollution between parent and cloned memory instances.
+
+        Note: _total_tokens is re-estimated from messages, not copied directly.
+        The synced token count includes system prompt + tool schemas which may
+        differ for the cloned memory's agent. The subagent will call
+        sync_token_count_from_llm_usage() after its first LLM call to get the
+        accurate count for its own configuration.
         """
         return FullCompressionMemory(
             summarizer_llm=self.summarizer_llm,
@@ -607,9 +613,16 @@ Rules for the fields:
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the memory into a dictionary.
-        
+
         Note: summarizer_llm and logger are not serialized and must be
         re-injected when deserializing via from_dict/from_json.
+
+        Note: _total_tokens is intentionally NOT serialized. The synced token
+        count from LLM usage includes system prompt + tool schemas, which are
+        not part of the serialized memory. When restored, token count is
+        re-estimated from messages only. The Agent will call
+        sync_token_count_from_llm_usage() after the first LLM call to restore
+        the accurate count including the new system prompt and tools.
         """
         result = {
             "max_tokens": self.max_tokens,
@@ -641,11 +654,17 @@ Rules for the fields:
         logger: Optional["Logger"] = None,
     ) -> "FullCompressionMemory":
         """Construct memory from a serialized dictionary payload.
-        
+
         Args:
             payload: Serialized memory data
             summarizer_llm: LLM instance for compression (required)
             logger: Optional logger for compression events
+
+        Note: Token count is re-estimated from messages during construction.
+        The serialized data does not include _total_tokens because the synced
+        count includes system prompt + tool schemas which may change. The Agent
+        should call sync_token_count_from_llm_usage() after the first LLM call
+        to restore accurate token tracking.
         """
         if not payload:
             return cls(summarizer_llm=summarizer_llm, logger=logger)
@@ -707,12 +726,15 @@ Rules for the fields:
         agent_name: Optional[str] = None,
     ) -> "FullCompressionMemory":
         """Construct memory from a JSON string.
-        
+
         Args:
             data: JSON string of serialized memory
             summarizer_llm: LLM instance for compression (required)
             logger: Optional logger for compression events
             agent_name: Optional agent name (used if not present in serialized data)
+
+        Note: Token count is re-estimated from messages. See from_dict docstring
+        for details on why _total_tokens is not serialized.
         """
         if not data:
             return cls(summarizer_llm=summarizer_llm, logger=logger, agent_name=agent_name)
