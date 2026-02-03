@@ -464,7 +464,7 @@ class MaximLogger(Logger):
             # Create or get Maxim session for proper session linking in UI
             if not self.maxim_session:
                 self.maxim_session = self.logger_instance.session({
-                    "id": self.agent_name,
+                    "id": str(uuid4()),
                     "name": f"Session-{self.agent_name}"
                 })
             
