@@ -556,3 +556,51 @@ async def test_subagent_compression_triggers_with_full_compression_memory():
         compression_result = child_compression[0][2]  # ToolResultBlock
         assert compression_result.name == "memory_compression"
         assert not compression_result.is_error
+
+
+@pytest.mark.asyncio
+async def test_subagent_preserves_memory_logger_when_parent_agent_has_no_logger():
+    """
+    Verify that when the parent agent has no logger but the memory does,
+    the subagent's cloned memory preserves its logger instead of setting it to None.
+
+    Bug: Previously, we unconditionally set sub_memory.logger = child_logger,
+    which would be None if the parent agent had no logger, removing the memory's
+    existing logger.
+    Fix: Only update memory logger if child_logger is not None.
+    """
+    # Create a memory WITH a logger
+    memory_logger = ChildTrackingLogger(name="memory_logger")
+    parent_memory = LoggerTrackingMemory(max_tokens=100_000, logger=memory_logger)
+
+    sub_llm = QueueLLM([make_text_message(MessageRole.ASSISTANT, "sub response")])
+    sub_tool = SubAgentTool(
+        name="delegate",
+        description="delegate work",
+        system_prompt="You are a helper.",
+        tools=[],
+        llm=sub_llm,
+        max_calls=1,
+    )
+
+    parent_llm = QueueLLM([make_text_message(MessageRole.ASSISTANT, "parent ok")])
+    # Parent agent has NO logger
+    Agent(
+        llm=parent_llm,
+        system_prompt="system",
+        max_calls=1,
+        max_tokens=10_000,
+        memory=parent_memory,
+        agent_name="parent_agent",
+        tools=[sub_tool],
+        logger=None,  # No logger on agent
+    )
+
+    # Execute the subagent
+    result = await sub_tool.execute(tool_use_id="tool-use-test", task="do work")
+
+    assert result.is_error is False
+
+    # The key assertion: no child logger should have been created since parent agent
+    # has no logger, and the memory's original logger should be preserved (not set to None)
+    assert len(memory_logger.children) == 0, "No child logger should be created when parent agent has no logger"
