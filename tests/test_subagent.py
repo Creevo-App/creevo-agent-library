@@ -17,9 +17,11 @@ class ChildTrackingLogger(FakeLogger):
         self.name = name
         self.children = []
 
-    def create_child_logger(self, name: str) -> "ChildTrackingLogger":
-        self.events.append(("create_child_logger", name))
-        child = ChildTrackingLogger(name=f"{self.name}_child_{name}")
+    def create_child_logger(self, name: str, agent_name: str = None) -> "ChildTrackingLogger":
+        self.events.append(("create_child_logger", name, agent_name))
+        # Use provided agent_name or fall back to derived name
+        child_name = agent_name if agent_name else f"{self.name}_child_{name}"
+        child = ChildTrackingLogger(name=child_name)
         self.children.append(child)
         return child
 
@@ -252,7 +254,10 @@ async def test_subagent_memory_uses_child_logger_not_parent():
     # Verify a child logger was created
     assert len(parent_logger.children) == 1, "Child logger should have been created"
     child_logger = parent_logger.children[0]
-    assert "delegate" in child_logger.name, "Child logger should be named after the subagent"
+    # Child logger name should be the subagent's full name (agent_name parameter)
+    assert child_logger.name == "parent_agent_sub_delegate", (
+        f"Child logger should have subagent's agent_name, got {child_logger.name}"
+    )
 
     # Verify the parent's logger is NOT the same as the child
     assert parent_logger is not child_logger
@@ -267,6 +272,8 @@ async def test_subagent_memory_uses_child_logger_not_parent():
     create_child_events = [e for e in parent_logger.events if e[0] == "create_child_logger"]
     assert len(create_child_events) == 1
     assert create_child_events[0][1] == "delegate"
+    # Verify the agent_name was passed to the child logger
+    assert create_child_events[0][2] == "parent_agent_sub_delegate"
 
 
 @pytest.mark.asyncio

@@ -83,8 +83,8 @@ class FakeLogger(Logger):
     def shutdown(self) -> None:
         self.events.append(("shutdown",))
 
-    def create_child_logger(self, name: str) -> "FakeLogger":
-        self.events.append(("create_child_logger", name))
+    def create_child_logger(self, name: str, agent_name: str = None) -> "FakeLogger":
+        self.events.append(("create_child_logger", name, agent_name))
         return FakeLogger()
 
     def end_child(self) -> None:

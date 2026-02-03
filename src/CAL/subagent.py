@@ -101,9 +101,13 @@ class SubAgentTool(Tool):
             sub_memory.archiver = CompressionArchiver(agent_name=sub_agent_name)
 
         # Create child logger for nested span logging
+        # Pass sub_agent_name so logging metadata reflects the subagent, not the parent
         child_logger = None
         if self._parent_agent.logger:
-            child_logger = self._parent_agent.logger.create_child_logger(self.name)
+            child_logger = self._parent_agent.logger.create_child_logger(
+                self.name,
+                agent_name=sub_agent_name
+            )
 
         # Update sub_memory's logger so compression events are logged under the subagent,
         # not the parent agent. The cloned memory inherits the parent's logger by default.
