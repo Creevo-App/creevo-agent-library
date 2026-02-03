@@ -406,3 +406,60 @@ def test_compression_role_patterns(_, roles, __):
     # With token-based compression, max_length bounds are less predictable
     # Just verify first message is preserved
     assert history[0].role == roles[0]
+
+
+def test_sync_token_count_from_llm_usage():
+    """Test that sync_token_count_from_llm_usage updates _total_tokens correctly.
+
+    This ensures compression triggers based on actual LLM token counts (which include
+    system prompt and tool schemas) rather than just estimated message content tokens.
+    """
+    memory = FullCompressionMemory(
+        summarizer_llm=get_fake_llm(),
+        max_tokens=1000,
+    )
+
+    # Add a message - this will use estimation (~4 chars/token)
+    memory.add_message(make_text_message(MessageRole.USER, "Hello world"))
+    estimated_tokens = memory._total_tokens
+    assert estimated_tokens > 0, "Should have estimated some tokens"
+
+    # Simulate LLM returning actual token count that's much higher
+    # (as if system prompt + tool schemas were included)
+    actual_prompt_tokens = 500
+    memory.sync_token_count_from_llm_usage(actual_prompt_tokens)
+
+    assert memory._total_tokens == actual_prompt_tokens, (
+        f"Token count should be synced to actual: {memory._total_tokens} != {actual_prompt_tokens}"
+    )
+
+
+def test_sync_token_count_triggers_compression():
+    """Test that syncing a high token count triggers compression on next add_message.
+
+    If the LLM reports we're near the limit, the next message should trigger compression.
+    """
+    memory = FullCompressionMemory(
+        summarizer_llm=get_fake_llm(),
+        max_tokens=1000,
+        compression_config=CompressionConfig(keep_recent_tokens=200),
+    )
+
+    # Add several messages (won't trigger compression with low estimates)
+    for i in range(5):
+        memory.add_message(make_text_message(MessageRole.USER, f"User message {i} " * 5))
+        memory.add_message(make_text_message(MessageRole.ASSISTANT, f"Assistant response {i} " * 5))
+
+    initial_message_count = len(memory._messages)
+    assert initial_message_count == 10, "Should have 10 messages"
+
+    # Sync token count to just below threshold
+    memory.sync_token_count_from_llm_usage(950)
+
+    # Add one more message - should trigger compression since 950 + new_tokens > 1000
+    memory.add_message(make_text_message(MessageRole.USER, "This should trigger compression " * 10))
+
+    # After compression, we should have fewer messages
+    assert len(memory._messages) < initial_message_count, (
+        f"Compression should have reduced messages from {initial_message_count} to fewer"
+    )

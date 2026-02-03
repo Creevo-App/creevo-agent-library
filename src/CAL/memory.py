@@ -77,12 +77,33 @@ class Memory(ABC):
     @abstractmethod
     def from_json(cls, data: Optional[str], **kwargs) -> "Memory":
         """Construct memory from a JSON string.
-        
+
         Args:
             data: JSON string of serialized memory
             **kwargs: Implementation-specific arguments (e.g., summarizer_llm, logger)
         """
         pass
+
+    def sync_token_count_from_llm_usage(self, prompt_tokens: int) -> None:
+        """Sync internal token count with actual LLM usage.
+
+        This method allows the memory to use actual token counts from the LLM
+        instead of estimates. Called by the Agent after each LLM response.
+
+        The prompt_tokens represents the total tokens sent to the LLM, which includes:
+        - System prompt tokens
+        - Tool schema tokens
+        - All conversation history tokens
+
+        This gives an accurate picture of context size for compression decisions.
+
+        Args:
+            prompt_tokens: The actual input token count from the LLM response usage data.
+
+        Note: Default implementation is a no-op. Subclasses that track token counts
+        (like FullCompressionMemory) should override this method.
+        """
+        pass  # Default no-op for Memory implementations that don't track tokens
 
 
 class FullCompressionMemory(Memory):
@@ -132,9 +153,28 @@ class FullCompressionMemory(Memory):
         msg_tokens = self._estimate_message_tokens(message)
         self._messages.append(message)
         self._total_tokens += msg_tokens
-        
+
         if self._total_tokens > self.max_tokens:
             self.compress()
+
+    def sync_token_count_from_llm_usage(self, prompt_tokens: int) -> None:
+        """Sync internal token count with actual LLM usage.
+
+        Updates _total_tokens to match the actual prompt tokens from the LLM,
+        which includes system prompt, tool schemas, and conversation history.
+        This ensures compression triggers based on real context size, not estimates.
+
+        Args:
+            prompt_tokens: The actual input token count from the LLM response.
+        """
+        old_total = self._total_tokens
+        self._total_tokens = prompt_tokens
+        if old_total != prompt_tokens:
+            print(
+                f"[Memory] Synced token count: estimated {old_total} -> actual {prompt_tokens} "
+                f"(diff: {prompt_tokens - old_total:+d})",
+                file=sys.stderr
+            )
 
     def _estimate_message_tokens(self, message: Message) -> int:
         """
