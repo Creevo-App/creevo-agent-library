@@ -256,20 +256,6 @@ class FullCompressionMemory(Memory):
         if len(self._messages) <= 3:
             return
 
-        # TODO: DELETE THIS DEBUG BLOCK - compression debugging
-        # ============ DEBUG START: compression state ============
-        _debug_state = {
-            "_total_tokens": self._total_tokens,
-            "_system_overhead": self._system_overhead,
-            "max_tokens": self.max_tokens,
-            "config_keep_recent_tokens": self.compression_config.keep_recent_tokens,
-            "num_messages": len(self._messages),
-        }
-        print(f"[DEBUG compress] state: {_debug_state}", file=sys.stderr)
-        if self.logger:
-            self.logger.log_metadata({"debug_compress_state": _debug_state})
-        # ============ DEBUG END: compression state ============
-
         # Calculate effective token budget for messages after accounting for system overhead
         # Leave a buffer for: initial message (~500), summary (~1000), new responses (~2000)
         response_buffer = 3500
@@ -281,17 +267,6 @@ class FullCompressionMemory(Memory):
             self.compression_config.keep_recent_tokens,
             max(1000, available_for_messages)  # Keep at least 1000 tokens
         )
-
-        # TODO: DELETE THIS DEBUG BLOCK - compression debugging
-        # ============ DEBUG START: budget calculations ============
-        _debug_budget = {
-            "available_for_messages": available_for_messages,
-            "effective_keep_recent_tokens": keep_recent_tokens,
-        }
-        print(f"[DEBUG compress] budget: {_debug_budget}", file=sys.stderr)
-        if self.logger:
-            self.logger.log_metadata({"debug_compress_budget": _debug_budget})
-        # ============ DEBUG END: budget calculations ============
 
         if keep_recent_tokens < self.compression_config.keep_recent_tokens:
             print(
@@ -342,22 +317,6 @@ class FullCompressionMemory(Memory):
         
         to_compress = self._messages[1:len(self._messages) - len(recent_messages)]
         recent = recent_messages
-
-        # TODO: DELETE THIS DEBUG BLOCK - compression debugging
-        # ============ DEBUG START: compression breakdown ============
-        _debug_recent_tokens = sum(self._estimate_message_tokens(m) for m in recent_messages)
-        _debug_compress_tokens = sum(self._estimate_message_tokens(m) for m in to_compress)
-        _debug_breakdown = {
-            "breakpoint_idx": breakpoint_idx,
-            "recent_messages_count": len(recent_messages),
-            "to_compress_count": len(to_compress),
-            "recent_tokens": _debug_recent_tokens,
-            "compress_tokens": _debug_compress_tokens,
-        }
-        print(f"[DEBUG compress] breakdown: {_debug_breakdown}", file=sys.stderr)
-        if self.logger:
-            self.logger.log_metadata({"debug_compress_breakdown": _debug_breakdown})
-        # ============ DEBUG END: compression breakdown ============
 
         if not to_compress:
             return
@@ -465,19 +424,6 @@ Rules for the fields:
               f"(message_tokens: {estimated_message_tokens}, system_overhead: {self._system_overhead}, total: {self._total_tokens})",
               file=sys.stderr)
 
-        # TODO: DELETE THIS DEBUG BLOCK - compression debugging
-        # ============ DEBUG START: final state ============
-        _debug_final = {
-            "final_num_messages": len(self._messages),
-            "final_total_tokens": self._total_tokens,
-            "final_message_tokens": estimated_message_tokens,
-            "final_system_overhead": self._system_overhead,
-        }
-        print(f"[DEBUG compress] final: {_debug_final}", file=sys.stderr)
-        if self.logger:
-            self.logger.log_metadata({"debug_compress_final": _debug_final})
-        # ============ DEBUG END: final state ============
-        
         # Log as tool call to tracing system
         if self.logger:
             tool_id = str(uuid4())
