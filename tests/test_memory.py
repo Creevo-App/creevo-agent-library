@@ -463,3 +463,116 @@ def test_sync_token_count_triggers_compression():
     assert len(memory._messages) < initial_message_count, (
         f"Compression should have reduced messages from {initial_message_count} to fewer"
     )
+
+
+def test_compression_with_system_overhead_does_not_loop():
+    """Test that compression accounts for system overhead and doesn't loop infinitely.
+
+    This tests the bug where:
+    1. Compression reduces message tokens to ~15k (keep_recent_tokens)
+    2. Next LLM call syncs _total_tokens to include system overhead (~25k + 15k = 40k)
+    3. Add response -> 42k > 40k max_tokens -> compress again!
+    4. Infinite loop because compression can't reduce below system overhead
+
+    The fix tracks _system_overhead and adjusts keep_recent_tokens dynamically.
+    """
+    # Simulate scenario: max_tokens=40k, system overhead=25k, leaves 15k for messages
+    max_tokens = 40000
+    system_overhead = 25000  # Simulates system prompt + tool schemas
+
+    memory = FullCompressionMemory(
+        summarizer_llm=get_fake_llm(),
+        max_tokens=max_tokens,
+        compression_config=CompressionConfig(keep_recent_tokens=15000),
+    )
+
+    # Add initial messages
+    memory.add_message(make_text_message(MessageRole.USER, "Initial request " * 100))
+    memory.add_message(make_text_message(MessageRole.ASSISTANT, "Response " * 100))
+    memory.add_message(make_text_message(MessageRole.USER, "Followup " * 100))
+    memory.add_message(make_text_message(MessageRole.ASSISTANT, "More response " * 100))
+
+    # Simulate first LLM call that establishes system overhead
+    # Actual prompt_tokens = system_overhead + message_tokens
+    estimated_msg_tokens = sum(memory._estimate_message_tokens(m) for m in memory._messages)
+    memory.sync_token_count_from_llm_usage(system_overhead + estimated_msg_tokens)
+
+    assert memory._system_overhead == system_overhead, (
+        f"System overhead should be calculated: {memory._system_overhead} != {system_overhead}"
+    )
+
+    # Add more messages to trigger compression
+    for i in range(10):
+        memory.add_message(make_text_message(MessageRole.USER, f"User msg {i} " * 50))
+        memory.add_message(make_text_message(MessageRole.ASSISTANT, f"Assistant msg {i} " * 50))
+
+    # Force compression by syncing high token count
+    memory.sync_token_count_from_llm_usage(max_tokens + 5000)
+    initial_msg_count = len(memory._messages)
+
+    # Add message to trigger compression
+    memory.add_message(make_text_message(MessageRole.USER, "Trigger compression"))
+
+    # Verify compression occurred
+    assert len(memory._messages) < initial_msg_count, "Compression should have reduced messages"
+
+    # After compression, _total_tokens should include system overhead
+    post_compression_total = memory._total_tokens
+    assert post_compression_total >= system_overhead, (
+        f"Post-compression total ({post_compression_total}) should include system overhead ({system_overhead})"
+    )
+
+    # Simulate next LLM call after compression
+    # The new prompt_tokens should be close to post_compression_total
+    # (system_overhead + compressed_message_tokens)
+    compressed_msg_tokens = sum(memory._estimate_message_tokens(m) for m in memory._messages)
+    new_prompt_tokens = system_overhead + compressed_msg_tokens
+    memory.sync_token_count_from_llm_usage(new_prompt_tokens)
+
+    msg_count_after_sync = len(memory._messages)
+
+    # Add one more response - should NOT trigger compression again
+    # because we already compressed and accounted for system overhead
+    memory.add_message(make_text_message(MessageRole.ASSISTANT, "Response after compression"))
+
+    # The key assertion: compression should NOT have triggered again
+    # (we should have same message count + 1 for the new message)
+    assert len(memory._messages) == msg_count_after_sync + 1, (
+        f"Should NOT re-compress: had {msg_count_after_sync} messages after sync, "
+        f"now have {len(memory._messages)} after adding 1 message. "
+        f"total_tokens={memory._total_tokens}, max_tokens={max_tokens}"
+    )
+
+
+def test_compression_adjusts_keep_recent_for_large_system_overhead():
+    """Test that compression reduces keep_recent_tokens when system overhead is large.
+
+    If system_overhead=35k and max_tokens=40k, we only have 5k for messages.
+    keep_recent_tokens should be reduced from 15k to ~5k to fit.
+    """
+    max_tokens = 40000
+    system_overhead = 35000  # Very large system overhead
+
+    memory = FullCompressionMemory(
+        summarizer_llm=get_fake_llm(),
+        max_tokens=max_tokens,
+        compression_config=CompressionConfig(keep_recent_tokens=15000),
+    )
+
+    # Add messages
+    for i in range(5):
+        memory.add_message(make_text_message(MessageRole.USER, f"User {i} " * 50))
+        memory.add_message(make_text_message(MessageRole.ASSISTANT, f"Assistant {i} " * 50))
+
+    # Establish large system overhead
+    estimated_msg_tokens = sum(memory._estimate_message_tokens(m) for m in memory._messages)
+    memory.sync_token_count_from_llm_usage(system_overhead + estimated_msg_tokens)
+
+    # Force compression
+    memory.add_message(make_text_message(MessageRole.USER, "Trigger " * 100))
+
+    # After compression, total should fit within max_tokens
+    # (accounting for the fact that we just added a message)
+    assert memory._total_tokens <= max_tokens + 500, (  # Allow small buffer for new message
+        f"Post-compression total ({memory._total_tokens}) should be near max_tokens ({max_tokens})"
+    )

@@ -131,6 +131,7 @@ class FullCompressionMemory(Memory):
         self.max_tokens = max_tokens
         self._messages: List[Message] = []
         self._total_tokens: int = 0  # Track running token count
+        self._system_overhead: int = 0  # System prompt + tool schema tokens (calculated by sync)
         self.summarizer_llm = summarizer_llm
         self.compression_config = compression_config or CompressionConfig()
         self.logger = logger
@@ -164,15 +165,24 @@ class FullCompressionMemory(Memory):
         which includes system prompt, tool schemas, and conversation history.
         This ensures compression triggers based on real context size, not estimates.
 
+        Also calculates and stores system overhead (system prompt + tool schema tokens)
+        so that compression can account for it when deciding how much to keep.
+
         Args:
             prompt_tokens: The actual input token count from the LLM response.
         """
         old_total = self._total_tokens
         self._total_tokens = prompt_tokens
+
+        # Calculate system overhead = actual tokens - estimated message tokens
+        # This represents the fixed cost of system prompt + tool schemas
+        estimated_message_tokens = sum(self._estimate_message_tokens(m) for m in self._messages)
+        self._system_overhead = max(0, prompt_tokens - estimated_message_tokens)
+
         if old_total != prompt_tokens:
             print(
                 f"[Memory] Synced token count: estimated {old_total} -> actual {prompt_tokens} "
-                f"(diff: {prompt_tokens - old_total:+d})",
+                f"(diff: {prompt_tokens - old_total:+d}, system_overhead: {self._system_overhead})",
                 file=sys.stderr
             )
 
@@ -245,8 +255,25 @@ class FullCompressionMemory(Memory):
         """
         if len(self._messages) <= 3:
             return
-        
-        keep_recent_tokens = self.compression_config.keep_recent_tokens
+
+        # Calculate effective token budget for messages after accounting for system overhead
+        # Leave a buffer for: initial message (~500), summary (~1000), new responses (~2000)
+        response_buffer = 3500
+        available_for_messages = self.max_tokens - self._system_overhead - response_buffer
+
+        # Use the smaller of configured keep_recent_tokens or available budget
+        # This ensures we don't keep more than we have room for
+        keep_recent_tokens = min(
+            self.compression_config.keep_recent_tokens,
+            max(1000, available_for_messages)  # Keep at least 1000 tokens
+        )
+
+        if keep_recent_tokens < self.compression_config.keep_recent_tokens:
+            print(
+                f"[Memory] Adjusted keep_recent_tokens: {self.compression_config.keep_recent_tokens} -> {keep_recent_tokens} "
+                f"(max_tokens={self.max_tokens}, system_overhead={self._system_overhead})",
+                file=sys.stderr
+            )
         
         # Find breakpoint by iterating backwards, accumulating tokens
         initial = self._messages[0]
@@ -386,12 +413,16 @@ Rules for the fields:
         )
         
         self._messages = [initial, summary_message] + recent
-        
+
         # Recalculate total token count after compression
-        self._total_tokens = sum(self._estimate_message_tokens(m) for m in self._messages)
-        
+        # Include system overhead so the next sync doesn't cause immediate re-compression
+        estimated_message_tokens = sum(self._estimate_message_tokens(m) for m in self._messages)
+        self._total_tokens = self._system_overhead + estimated_message_tokens
+
         # Log compression complete
-        print(f"[Memory] Compression complete: {len(to_compress)} messages -> 1 summary in {elapsed_time:.2f}s", file=sys.stderr)
+        print(f"[Memory] Compression complete: {len(to_compress)} messages -> 1 summary in {elapsed_time:.2f}s "
+              f"(message_tokens: {estimated_message_tokens}, system_overhead: {self._system_overhead}, total: {self._total_tokens})",
+              file=sys.stderr)
         
         # Log as tool call to tracing system
         if self.logger:
