@@ -1,0 +1,11 @@
+name: Cursor PR Validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  validation:
+    uses: Creevo-App/Product-v1/.github/workflows/cursor-pr-review.yml@main
+    secrets:
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
