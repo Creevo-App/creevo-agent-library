@@ -29,6 +29,11 @@ class ContentBlock(ABC):
     def to_dict(self) -> dict:
         pass
 
+    @abstractmethod
+    def clone(self) -> 'ContentBlock':
+        """Create a deep copy of this content block."""
+        pass
+
     @staticmethod
     def from_dict(data: dict) -> 'ContentBlock':
         block_type = data.get("type")
@@ -71,6 +76,10 @@ class TextBlock(ContentBlock):
     @staticmethod
     def from_dict(data: dict) -> 'TextBlock':
         return TextBlock(text=data.get("text", ""))
+
+    def clone(self) -> 'TextBlock':
+        """Create a deep copy of this text block."""
+        return TextBlock(text=self.text)
 
 
 class ImageSource:
@@ -131,12 +140,16 @@ class ImageSource:
                 image_data = base64.b64decode(image_data)
             except Exception:
                 pass
-                
+
         return ImageSource(
             type=data.get("type", "base64"),
             media_type=data.get("media_type", "image/png"),
             data=image_data,
         )
+
+    def clone(self) -> 'ImageSource':
+        """Create a deep copy of this image source."""
+        return ImageSource(type=self.type, media_type=self.media_type, data=self.data)
 
 
 class ImageBlock(ContentBlock):
@@ -172,6 +185,10 @@ class ImageBlock(ContentBlock):
     def from_dict(data: dict) -> 'ImageBlock':
         source_data = data.get("source") or {}
         return ImageBlock(source=ImageSource.from_dict(source_data))
+
+    def clone(self) -> 'ImageBlock':
+        """Create a deep copy of this image block."""
+        return ImageBlock(source=self.source.clone())
 
 
 class ToolUseBlock(ContentBlock):
@@ -245,6 +262,17 @@ class ToolUseBlock(ContentBlock):
             input=data.get("input") or {},
             thought=data.get("thought"),
             thought_signature=thought_signature,
+        )
+
+    def clone(self) -> 'ToolUseBlock':
+        """Create a deep copy of this tool use block."""
+        import copy
+        return ToolUseBlock(
+            id=self.id,
+            name=self.name,
+            input=copy.deepcopy(self.input),
+            thought=self.thought,
+            thought_signature=self.thought_signature,
         )
 
 
@@ -321,11 +349,26 @@ class ToolResultBlock(ContentBlock):
         content = data.get("content")
         if isinstance(content, list):
             content = [ContentBlock.from_dict(item) for item in content]
-        
+
         return ToolResultBlock(
             tool_use_id=data.get("tool_use_id", ""),
             content=content,
             is_error=bool(data.get("is_error")),
             name=data.get("name"),
             metadata=data.get("metadata"),
+        )
+
+    def clone(self) -> 'ToolResultBlock':
+        """Create a deep copy of this tool result block."""
+        import copy
+        if isinstance(self.content, str):
+            cloned_content = self.content
+        else:
+            cloned_content = [block.clone() for block in self.content]
+        return ToolResultBlock(
+            tool_use_id=self.tool_use_id,
+            content=cloned_content,
+            is_error=self.is_error,
+            name=self.name,
+            metadata=copy.deepcopy(self.metadata) if self.metadata else None,
         )

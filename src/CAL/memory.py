@@ -590,7 +590,10 @@ Rules for the fields:
         return history
 
     def clone(self) -> 'FullCompressionMemory':
-        """Create a copy of this memory with the same history.
+        """Create a deep copy of this memory with the same history.
+
+        All Message objects are deep copied to ensure complete isolation
+        between parent and subagent memory instances.
 
         Note: The archiver is NOT shared - each clone gets its own fresh archiver
         to prevent state pollution between parent and cloned memory instances.
@@ -601,10 +604,12 @@ Rules for the fields:
         sync_token_count_from_llm_usage() after its first LLM call to get the
         accurate count for its own configuration.
         """
+        cloned_messages = [msg.clone() for msg in self._messages]
+
         return FullCompressionMemory(
             summarizer_llm=self.summarizer_llm,
             max_tokens=self.max_tokens,
-            messages=list(self._messages),
+            messages=cloned_messages,
             compression_config=self.compression_config,
             logger=self.logger,
             agent_name=self.agent_name,

@@ -45,3 +45,17 @@ class Message:
             f"usage={self.usage}, metadata={self.metadata})"
         )
 
+    def clone(self) -> 'Message':
+        """Create a deep copy of this message."""
+        import copy
+        if isinstance(self.content, str):
+            cloned_content = self.content
+        else:
+            cloned_content = [block.clone() for block in self.content]
+        return Message(
+            role=self.role,
+            content=cloned_content,
+            usage=copy.deepcopy(self.usage) if self.usage else {},
+            metadata=copy.deepcopy(self.metadata) if self.metadata else {},
+        )
+
