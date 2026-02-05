@@ -118,13 +118,16 @@ class Logger(ABC):
         pass
 
     @abstractmethod
-    def create_child_logger(self, name: str) -> "Logger":
+    def create_child_logger(self, name: str, agent_name: Optional[str] = None) -> "Logger":
         """
         Create a child logger for sub-agent execution with nested span context.
-        
+
         Args:
             name: Name identifier for the child logger (typically sub-agent name)
-            
+            agent_name: Optional agent name for the child logger. If not provided,
+                       inherits from parent. Subagents should pass their own agent_name
+                       so logging metadata reflects the subagent, not the parent.
+
         Returns:
             A new Logger instance that logs under a nested span context
         """
@@ -341,7 +344,7 @@ class LangSmithLogger(Logger):
         if hasattr(self, 'provider'):
             self.provider.shutdown()
 
-    def create_child_logger(self, name: str) -> "LangSmithLogger":
+    def create_child_logger(self, name: str, agent_name: Optional[str] = None) -> "LangSmithLogger":
         """Stub: TODO: come back to this."""
         return self
 
@@ -405,13 +408,23 @@ class MaximLogger(Logger):
                 print(f"MaximLogger disabled: Failed to initialize - {e}", file=sys.stderr)
             return None
 
-    def create_child_logger(self, name: str) -> "MaximLogger":
-        """Create a child logger that logs under a nested sub-agent span."""
+    def create_child_logger(self, name: str, agent_name: Optional[str] = None) -> "MaximLogger":
+        """Create a child logger that logs under a nested sub-agent span.
+
+        Args:
+            name: Name identifier for the child span (typically sub-agent tool name)
+            agent_name: Agent name for the child logger. If not provided, inherits
+                       from parent. Subagents should pass their own agent_name so
+                       logging metadata reflects the subagent, not the parent.
+        """
         span_parent = self._parent_span if self._is_child else self.root_trace
-        
+
         if not span_parent:
             raise RuntimeError("Cannot create child logger: no active trace or parent span")
-        
+
+        # Use provided agent_name or fall back to parent's
+        child_agent_name = agent_name if agent_name is not None else self.agent_name
+
         # Create wrapper span for sub-agent execution
         wrapper_span = span_parent.span({
             "id": str(uuid4()),
@@ -419,12 +432,12 @@ class MaximLogger(Logger):
             "tags": {
                 "type": "subagent",
                 "subagent_name": name,
-                "agent_name": self.agent_name
+                "agent_name": child_agent_name
             }
         })
-        
+
         # Create child logger that will log under this wrapper span
-        child = MaximLogger(agent_name=self.agent_name, _parent_span=wrapper_span)
+        child = MaximLogger(agent_name=child_agent_name, _parent_span=wrapper_span)
         child.system_prompt = self.system_prompt
         child.user_prompt = self.user_prompt
         return child

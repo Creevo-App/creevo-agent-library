@@ -269,13 +269,19 @@ class Agent:
                 # Log LLM response
                 if self.logger:
                     self.logger.log_llm_response(
-                        agent_message, 
-                        iteration, 
-                        model=self.llm.name, 
+                        agent_message,
+                        iteration,
+                        model=self.llm.name,
                         provider=self.llm.provider,
                         start_time=llm_start_time,
                         end_time=llm_end_time
                     )
+
+                # Sync memory token count with actual LLM usage.
+                # This ensures compression triggers based on real context size (including
+                # system prompt and tool schemas), not just estimated message content tokens.
+                if agent_message.usage and 'prompt_tokens' in agent_message.usage:
+                    self.memory.sync_token_count_from_llm_usage(agent_message.usage['prompt_tokens'])
 
                 # Check for error finish reasons before adding to history
                 if hasattr(agent_message, 'metadata') and agent_message.metadata:

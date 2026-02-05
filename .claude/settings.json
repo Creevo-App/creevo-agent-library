@@ -1,0 +1,8 @@
+{
+  "skills": {
+    "test": {
+      "description": "Run the CAL test suite using pytest",
+      "path": "skills/test.md"
+    }
+  }
+}

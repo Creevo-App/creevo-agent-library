@@ -77,12 +77,33 @@ class Memory(ABC):
     @abstractmethod
     def from_json(cls, data: Optional[str], **kwargs) -> "Memory":
         """Construct memory from a JSON string.
-        
+
         Args:
             data: JSON string of serialized memory
             **kwargs: Implementation-specific arguments (e.g., summarizer_llm, logger)
         """
         pass
+
+    def sync_token_count_from_llm_usage(self, prompt_tokens: int) -> None:
+        """Sync internal token count with actual LLM usage.
+
+        This method allows the memory to use actual token counts from the LLM
+        instead of estimates. Called by the Agent after each LLM response.
+
+        The prompt_tokens represents the total tokens sent to the LLM, which includes:
+        - System prompt tokens
+        - Tool schema tokens
+        - All conversation history tokens
+
+        This gives an accurate picture of context size for compression decisions.
+
+        Args:
+            prompt_tokens: The actual input token count from the LLM response usage data.
+
+        Note: Default implementation is a no-op. Subclasses that track token counts
+        (like FullCompressionMemory) should override this method.
+        """
+        pass  # Default no-op for Memory implementations that don't track tokens
 
 
 class FullCompressionMemory(Memory):
@@ -110,6 +131,7 @@ class FullCompressionMemory(Memory):
         self.max_tokens = max_tokens
         self._messages: List[Message] = []
         self._total_tokens: int = 0  # Track running token count
+        self._system_overhead: int = 0  # System prompt + tool schema tokens (calculated by sync)
         self.summarizer_llm = summarizer_llm
         self.compression_config = compression_config or CompressionConfig()
         self.logger = logger
@@ -132,20 +154,52 @@ class FullCompressionMemory(Memory):
         msg_tokens = self._estimate_message_tokens(message)
         self._messages.append(message)
         self._total_tokens += msg_tokens
-        
+
         if self._total_tokens > self.max_tokens:
             self.compress()
+
+    def sync_token_count_from_llm_usage(self, prompt_tokens: int) -> None:
+        """Sync internal token count with actual LLM usage.
+
+        Updates _total_tokens to match the actual prompt tokens from the LLM,
+        which includes system prompt, tool schemas, and conversation history.
+        This ensures compression triggers based on real context size, not estimates.
+
+        Also calculates and stores system overhead (system prompt + tool schema tokens)
+        so that compression can account for it when deciding how much to keep.
+
+        Args:
+            prompt_tokens: The actual input token count from the LLM response.
+        """
+        old_total = self._total_tokens
+        self._total_tokens = prompt_tokens
+
+        # Calculate system overhead = actual tokens - estimated message tokens
+        # This represents the fixed cost of system prompt + tool schemas
+        estimated_message_tokens = sum(self._estimate_message_tokens(m) for m in self._messages)
+        self._system_overhead = max(0, prompt_tokens - estimated_message_tokens)
+
+        if old_total != prompt_tokens:
+            print(
+                f"[Memory] Synced token count: estimated {old_total} -> actual {prompt_tokens} "
+                f"(diff: {prompt_tokens - old_total:+d}, system_overhead: {self._system_overhead})",
+                file=sys.stderr
+            )
 
     def _estimate_message_tokens(self, message: Message) -> int:
         """
         Get or estimate the token count for a message.
-        
-        For assistant messages with usage data, use completion_tokens (output only)
-        since total_tokens includes all prompt tokens which are already counted.
-        For other messages, estimate from content.
+
+        Used for:
+        - Adding completion_tokens after sync_token_count_from_llm_usage()
+        - Fallback estimation when no LLM usage data is available
+        - Compression breakpoint calculation in compress()
+
+        For assistant messages with usage data, returns completion_tokens only
+        (since prompt_tokens are already accounted for via sync).
+        For other messages, estimates from content (~4 chars/token).
         """
-        # For assistant messages, use completion_tokens to avoid double-counting
-        # total_tokens = prompt_tokens + completion_tokens, but prompt is already counted
+        # For assistant messages, use completion_tokens (the new output tokens only)
         if message.role == MessageRole.ASSISTANT and message.usage:
             if 'completion_tokens' in message.usage:
                 return message.usage['completion_tokens']
@@ -195,14 +249,31 @@ class FullCompressionMemory(Memory):
         """
         Compress memory: keep initial user message, summarize middle,
         keep most recent messages up to token limit (keep_recent_tokens).
-        
+
         Uses LLM-based summarization to generate a summary, then archives
         full context to files for agent discovery via history.md index.
         """
         if len(self._messages) <= 3:
             return
-        
-        keep_recent_tokens = self.compression_config.keep_recent_tokens
+
+        # Calculate effective token budget for messages after accounting for system overhead
+        # Leave a buffer for: initial message (~500), summary (~1000), new responses (~2000)
+        response_buffer = 3500
+        available_for_messages = self.max_tokens - self._system_overhead - response_buffer
+
+        # Use the smaller of configured keep_recent_tokens or available budget
+        # This ensures we don't keep more than we have room for
+        keep_recent_tokens = min(
+            self.compression_config.keep_recent_tokens,
+            max(1000, available_for_messages)  # Keep at least 1000 tokens
+        )
+
+        if keep_recent_tokens < self.compression_config.keep_recent_tokens:
+            print(
+                f"[Memory] Adjusted keep_recent_tokens: {self.compression_config.keep_recent_tokens} -> {keep_recent_tokens} "
+                f"(max_tokens={self.max_tokens}, system_overhead={self._system_overhead})",
+                file=sys.stderr
+            )
         
         # Find breakpoint by iterating backwards, accumulating tokens
         initial = self._messages[0]
@@ -246,7 +317,7 @@ class FullCompressionMemory(Memory):
         
         to_compress = self._messages[1:len(self._messages) - len(recent_messages)]
         recent = recent_messages
-        
+
         if not to_compress:
             return
         
@@ -342,13 +413,17 @@ Rules for the fields:
         )
         
         self._messages = [initial, summary_message] + recent
-        
+
         # Recalculate total token count after compression
-        self._total_tokens = sum(self._estimate_message_tokens(m) for m in self._messages)
-        
+        # Include system overhead so the next sync doesn't cause immediate re-compression
+        estimated_message_tokens = sum(self._estimate_message_tokens(m) for m in self._messages)
+        self._total_tokens = self._system_overhead + estimated_message_tokens
+
         # Log compression complete
-        print(f"[Memory] Compression complete: {len(to_compress)} messages -> 1 summary in {elapsed_time:.2f}s", file=sys.stderr)
-        
+        print(f"[Memory] Compression complete: {len(to_compress)} messages -> 1 summary in {elapsed_time:.2f}s "
+              f"(message_tokens: {estimated_message_tokens}, system_overhead: {self._system_overhead}, total: {self._total_tokens})",
+              file=sys.stderr)
+
         # Log as tool call to tracing system
         if self.logger:
             tool_id = str(uuid4())
@@ -509,35 +584,6 @@ Rules for the fields:
         
         return "\n\n".join(lines)
 
-    # def _parse_llm_json_response(self, response_text: str) -> Dict[str, Any]:
-    #     """
-    #     Parse JSON from LLM response, handling common formatting issues.
-    #     This is what claude said, not entirely sure if it is correct, I can rip whole function if we prefer?
-    #     LLMs often wrap JSON output in markdown code fences (```json ... ```)
-    #     even when asked for raw JSON. This method strips those fences before parsing.
-    #     """
-    #     text = response_text.strip()
-    #     
-    #     # Remove markdown code blocks if present (LLMs often wrap JSON in fences)
-    #     if text.startswith("```"):
-    #         lines = text.split("\n")
-    #         # Remove first line (```json or ```)
-    #         lines = lines[1:]
-    #         # Remove last line if it's ```
-    #         if lines and lines[-1].strip() == "```":
-    #             lines = lines[:-1]
-    #         text = "\n".join(lines)
-    #     
-    #     try:
-    #         return json.loads(text)
-    #     except json.JSONDecodeError:
-    #         # Return defaults if parsing fails
-    #         return {
-    #             "filename": "context",
-    #             "summary": "Conversation context",
-    #             "detailed_summary": response_text,
-    #         }
-
     def get_history(self) -> List[Message]:
         """
         Return the current conversation history.
@@ -575,15 +621,26 @@ Rules for the fields:
         return history
 
     def clone(self) -> 'FullCompressionMemory':
-        """Create a copy of this memory with the same history.
+        """Create a deep copy of this memory with the same history.
+
+        All Message objects are deep copied to ensure complete isolation
+        between parent and subagent memory instances.
 
         Note: The archiver is NOT shared - each clone gets its own fresh archiver
         to prevent state pollution between parent and cloned memory instances.
+
+        Note: _total_tokens is re-estimated from messages, not copied directly.
+        The synced token count includes system prompt + tool schemas which may
+        differ for the cloned memory's agent. The subagent will call
+        sync_token_count_from_llm_usage() after its first LLM call to get the
+        accurate count for its own configuration.
         """
+        cloned_messages = [msg.clone() for msg in self._messages]
+
         return FullCompressionMemory(
             summarizer_llm=self.summarizer_llm,
             max_tokens=self.max_tokens,
-            messages=list(self._messages),
+            messages=cloned_messages,
             compression_config=self.compression_config,
             logger=self.logger,
             agent_name=self.agent_name,
@@ -592,9 +649,16 @@ Rules for the fields:
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the memory into a dictionary.
-        
+
         Note: summarizer_llm and logger are not serialized and must be
         re-injected when deserializing via from_dict/from_json.
+
+        Note: _total_tokens is intentionally NOT serialized. The synced token
+        count from LLM usage includes system prompt + tool schemas, which are
+        not part of the serialized memory. When restored, token count is
+        re-estimated from messages only. The Agent will call
+        sync_token_count_from_llm_usage() after the first LLM call to restore
+        the accurate count including the new system prompt and tools.
         """
         result = {
             "max_tokens": self.max_tokens,
@@ -626,11 +690,17 @@ Rules for the fields:
         logger: Optional["Logger"] = None,
     ) -> "FullCompressionMemory":
         """Construct memory from a serialized dictionary payload.
-        
+
         Args:
             payload: Serialized memory data
             summarizer_llm: LLM instance for compression (required)
             logger: Optional logger for compression events
+
+        Note: Token count is re-estimated from messages during construction.
+        The serialized data does not include _total_tokens because the synced
+        count includes system prompt + tool schemas which may change. The Agent
+        should call sync_token_count_from_llm_usage() after the first LLM call
+        to restore accurate token tracking.
         """
         if not payload:
             return cls(summarizer_llm=summarizer_llm, logger=logger)
@@ -692,12 +762,15 @@ Rules for the fields:
         agent_name: Optional[str] = None,
     ) -> "FullCompressionMemory":
         """Construct memory from a JSON string.
-        
+
         Args:
             data: JSON string of serialized memory
             summarizer_llm: LLM instance for compression (required)
             logger: Optional logger for compression events
             agent_name: Optional agent name (used if not present in serialized data)
+
+        Note: Token count is re-estimated from messages. See from_dict docstring
+        for details on why _total_tokens is not serialized.
         """
         if not data:
             return cls(summarizer_llm=summarizer_llm, logger=logger, agent_name=agent_name)
