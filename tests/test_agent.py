@@ -376,3 +376,56 @@ async def test_push_context_thread_safe():
         if isinstance(block, TextBlock)
     ]
     assert "from another thread" in texts
+
+
+@pytest.mark.asyncio
+async def test_push_context_stale_cleared_between_runs():
+    """Context pushed during the final iteration (after the last drain) is
+    discarded so it doesn't leak into a subsequent run_async call."""
+    agent_ref = {}
+
+    class PushOnStopTool(Tool):
+        """Pushes stale context when the stop tool fires (after the last drain)."""
+        def __init__(self):
+            async def _fn():
+                return {"content": [{"type": "text", "text": "STOP"}], "metadata": {}}
+            super().__init__(_fn)
+            self.name = "stop"
+
+        async def execute(self, **kwargs) -> ToolResultBlock:
+            tool_use_id = kwargs.pop("tool_use_id", "stub")
+            # Simulate an external thread pushing context while stop executes
+            agent_ref["agent"].push_context("stale from previous run")
+            return ToolResultBlock(
+                tool_use_id=tool_use_id, content="STOP",
+                is_error=False, name=self.name,
+            )
+
+    stop_msg_1 = make_tool_use_message("stop", tool_use_id="s1")
+    stop_msg_2 = make_tool_use_message("stop", tool_use_id="s2")
+    llm = QueueLLM([stop_msg_1, stop_msg_2])
+    memory = FullCompressionMemory(summarizer_llm=llm)
+    agent = Agent(
+        llm=llm,
+        system_prompt="system",
+        max_calls=2,
+        max_tokens=10,
+        memory=memory,
+        agent_name="session",
+        tools=[PushOnStopTool()],
+    )
+    agent_ref["agent"] = agent
+
+    await agent.run_async("first run")
+
+    # Second run should NOT see the stale context
+    await agent.run_async("second run")
+
+    second_run_history = llm.calls[1]["history"]
+    texts = [
+        block.text
+        for msg in second_run_history
+        for block in (msg.content if isinstance(msg.content, list) else [])
+        if isinstance(block, TextBlock)
+    ]
+    assert "stale from previous run" not in texts

@@ -218,7 +218,7 @@ class Agent:
         
         # Clean up any incomplete conversation sequences (e.g., from mid-execution saves)
         self._cleanup_incomplete_conversation()
-        
+
         # Unified retry counter for all recoverable errors (LLM errors, malformed calls, no tool calls)
         max_retries = 10
         retries = 0
@@ -444,6 +444,11 @@ class Agent:
                         "total_iterations": iteration
                     }
                 )
+
+            # Discard any context pushed after the last drain so it doesn't
+            # leak into a subsequent run_async call on the same agent.
+            while not self._context_queue.empty():
+                self._context_queue.get_nowait()
 
         # last_agent_message is guaranteed to be set since max_calls > 0
         return last_agent_message
