@@ -6,6 +6,7 @@ import time
 import sys
 import json
 import asyncio
+import queue
 from typing import List, Optional
 
 from .logger import Logger
@@ -61,6 +62,7 @@ class Agent:
         self.memory = memory
         self.agent_name = agent_name
         self.logger = logger
+        self._context_queue = queue.Queue()
 
         # Bind SubAgentTools to this agent for context access
         # We do the import here at runtime to avoid circular imports at module load time
@@ -185,6 +187,11 @@ class Agent:
             return False
         return any(isinstance(block, ToolUseBlock) for block in message.content)
     
+    def push_context(self, context: str) -> None:
+        """Push additional context into the agent. Thread-safe.
+        Injected as a USER message before the next LLM call."""
+        self._context_queue.put(context)
+
     def _cleanup_incomplete_conversation(self):
         """
         Remove incomplete conversation sequences from memory.
@@ -232,7 +239,30 @@ class Agent:
         
         try:
             while iteration < self.max_calls:
-                
+
+                # Drain any externally pushed context.
+                # Appends to the last message when it's already USER-role
+                # (e.g. after tool results) to avoid consecutive USER messages
+                # which violate Gemini's strict role alternation.
+                pushed_blocks = []
+                while True:
+                    try:
+                        pushed_blocks.append(TextBlock(text=self._context_queue.get_nowait()))
+                    except queue.Empty:
+                        break
+                if pushed_blocks:
+                    history = self.memory.get_history()
+                    if history and history[-1].role == MessageRole.USER:
+                        last_msg = self.memory._messages[-1]
+                        if isinstance(last_msg.content, list):
+                            last_msg.content.extend(pushed_blocks)
+                        else:
+                            last_msg.content = [TextBlock(text=last_msg.content)] + pushed_blocks
+                    else:
+                        self.memory.add_message(
+                            Message(role=MessageRole.USER, content=pushed_blocks)
+                        )
+
                 # Step 1: Generate LLM response with Timing
                 emit_progress(
                     self.agent_name,
