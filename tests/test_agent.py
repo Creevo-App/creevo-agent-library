@@ -1,4 +1,5 @@
 import json
+import threading
 
 import pytest
 
@@ -6,7 +7,8 @@ from CAL.agent import Agent, PROGRESS_PREFIX, emit_progress
 from CAL.content_blocks import TextBlock, ToolUseBlock
 from CAL.memory import FullCompressionMemory
 from CAL.message import Message, MessageRole
-from CAL.tool import StopTool
+from CAL.tool import StopTool, Tool
+from CAL.content_blocks import ToolResultBlock
 
 from conftest import FakeTool, QueueLLM, make_text_message, make_tool_use_message
 
@@ -177,3 +179,253 @@ async def test_run_raises_when_called_in_event_loop():
 
     with pytest.raises(RuntimeError, match="await agent.run_async"):
         agent.run("prompt")
+
+
+# --- push_context tests ---
+
+
+@pytest.mark.asyncio
+async def test_push_context_appears_in_history():
+    """Pushed context is visible to the LLM as a USER message."""
+    stop_message = make_tool_use_message("stop", tool_use_id="s1")
+    llm = QueueLLM([stop_message])
+    memory = FullCompressionMemory(summarizer_llm=llm)
+    agent = Agent(
+        llm=llm,
+        system_prompt="system",
+        max_calls=2,
+        max_tokens=10,
+        memory=memory,
+        agent_name="session",
+        tools=[StopTool()],
+    )
+
+    # Push context before running — it should be drained on the first iteration
+    agent.push_context("also check the tests")
+
+    await agent.run_async("build the app")
+
+    # The LLM should have seen both the user prompt and the pushed context
+    call_history = llm.calls[0]["history"]
+    texts = [
+        block.text
+        for msg in call_history
+        for block in (msg.content if isinstance(msg.content, list) else [])
+        if isinstance(block, TextBlock)
+    ]
+    assert "build the app" in texts
+    assert "also check the tests" in texts
+
+
+@pytest.mark.asyncio
+async def test_push_context_mid_execution():
+    """Context pushed during tool execution appears in the next LLM call."""
+    agent_ref = {}
+
+    class PushingTool(Tool):
+        """A tool that pushes context onto the agent when executed."""
+        def __init__(self):
+            async def _fn(text: str = ""):
+                return {"content": [{"type": "text", "text": "ok"}], "metadata": {}}
+            super().__init__(_fn)
+            self.name = "pushing_tool"
+
+        async def execute(self, **kwargs) -> ToolResultBlock:
+            tool_use_id = kwargs.pop("tool_use_id", "stub")
+            # Push context while tool is executing
+            agent_ref["agent"].push_context("new instructions from user")
+            return ToolResultBlock(
+                tool_use_id=tool_use_id,
+                content=[TextBlock(text="done")],
+                is_error=False,
+                name=self.name,
+            )
+
+    tool_use_msg = Message(
+        role=MessageRole.ASSISTANT,
+        content=[ToolUseBlock(id="t1", name="pushing_tool", input={})],
+    )
+    stop_msg = make_tool_use_message("stop", tool_use_id="s1")
+    llm = QueueLLM([tool_use_msg, stop_msg])
+    memory = FullCompressionMemory(summarizer_llm=llm)
+    agent = Agent(
+        llm=llm,
+        system_prompt="system",
+        max_calls=5,
+        max_tokens=10,
+        memory=memory,
+        agent_name="session",
+        tools=[PushingTool(), StopTool()],
+    )
+    agent_ref["agent"] = agent
+
+    await agent.run_async("start")
+
+    # The second LLM call should see the pushed context
+    second_call_history = llm.calls[1]["history"]
+    texts = [
+        block.text
+        for msg in second_call_history
+        for block in (msg.content if isinstance(msg.content, list) else [])
+        if isinstance(block, TextBlock)
+    ]
+    assert "new instructions from user" in texts
+
+    # Pushed context should be merged into the tool results message (USER role),
+    # not create a consecutive USER message that breaks Gemini role alternation.
+    roles = [msg.role for msg in second_call_history]
+    for i in range(1, len(roles)):
+        assert not (roles[i] == MessageRole.USER and roles[i - 1] == MessageRole.USER), (
+            f"Consecutive USER messages at positions {i-1} and {i}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_push_context_multiple_fifo():
+    """Multiple pushed contexts appear in FIFO order."""
+    stop_message = make_tool_use_message("stop", tool_use_id="s1")
+    llm = QueueLLM([stop_message])
+    memory = FullCompressionMemory(summarizer_llm=llm)
+    agent = Agent(
+        llm=llm,
+        system_prompt="system",
+        max_calls=2,
+        max_tokens=10,
+        memory=memory,
+        agent_name="session",
+        tools=[StopTool()],
+    )
+
+    agent.push_context("first")
+    agent.push_context("second")
+
+    await agent.run_async("start")
+
+    call_history = llm.calls[0]["history"]
+    texts = [
+        block.text
+        for msg in call_history
+        for block in (msg.content if isinstance(msg.content, list) else [])
+        if isinstance(block, TextBlock)
+    ]
+    first_idx = texts.index("first")
+    second_idx = texts.index("second")
+    assert first_idx < second_idx
+
+
+@pytest.mark.asyncio
+async def test_push_context_thread_safe():
+    """push_context works when called from a different thread."""
+    agent_ref = {}
+    context_received = threading.Event()
+
+    class SlowTool(Tool):
+        def __init__(self):
+            async def _fn(text: str = ""):
+                return {"content": [{"type": "text", "text": "ok"}], "metadata": {}}
+            super().__init__(_fn)
+            self.name = "slow_tool"
+
+        async def execute(self, **kwargs) -> ToolResultBlock:
+            tool_use_id = kwargs.pop("tool_use_id", "stub")
+            # Signal the other thread to push, then wait briefly
+            context_received.set()
+            import asyncio
+            await asyncio.sleep(0.05)
+            return ToolResultBlock(
+                tool_use_id=tool_use_id,
+                content=[TextBlock(text="done")],
+                is_error=False,
+                name=self.name,
+            )
+
+    tool_use_msg = Message(
+        role=MessageRole.ASSISTANT,
+        content=[ToolUseBlock(id="t1", name="slow_tool", input={})],
+    )
+    stop_msg = make_tool_use_message("stop", tool_use_id="s1")
+    llm = QueueLLM([tool_use_msg, stop_msg])
+    memory = FullCompressionMemory(summarizer_llm=llm)
+    agent = Agent(
+        llm=llm,
+        system_prompt="system",
+        max_calls=5,
+        max_tokens=10,
+        memory=memory,
+        agent_name="session",
+        tools=[SlowTool(), StopTool()],
+    )
+    agent_ref["agent"] = agent
+
+    def push_from_thread():
+        context_received.wait(timeout=5)
+        agent_ref["agent"].push_context("from another thread")
+
+    t = threading.Thread(target=push_from_thread)
+    t.start()
+
+    await agent.run_async("start")
+    t.join()
+
+    # The second LLM call should include the pushed context
+    second_call_history = llm.calls[1]["history"]
+    texts = [
+        block.text
+        for msg in second_call_history
+        for block in (msg.content if isinstance(msg.content, list) else [])
+        if isinstance(block, TextBlock)
+    ]
+    assert "from another thread" in texts
+
+
+@pytest.mark.asyncio
+async def test_push_context_stale_cleared_between_runs():
+    """Context pushed during the final iteration (after the last drain) is
+    discarded so it doesn't leak into a subsequent run_async call."""
+    agent_ref = {}
+
+    class PushOnStopTool(Tool):
+        """Pushes stale context when the stop tool fires (after the last drain)."""
+        def __init__(self):
+            async def _fn():
+                return {"content": [{"type": "text", "text": "STOP"}], "metadata": {}}
+            super().__init__(_fn)
+            self.name = "stop"
+
+        async def execute(self, **kwargs) -> ToolResultBlock:
+            tool_use_id = kwargs.pop("tool_use_id", "stub")
+            # Simulate an external thread pushing context while stop executes
+            agent_ref["agent"].push_context("stale from previous run")
+            return ToolResultBlock(
+                tool_use_id=tool_use_id, content="STOP",
+                is_error=False, name=self.name,
+            )
+
+    stop_msg_1 = make_tool_use_message("stop", tool_use_id="s1")
+    stop_msg_2 = make_tool_use_message("stop", tool_use_id="s2")
+    llm = QueueLLM([stop_msg_1, stop_msg_2])
+    memory = FullCompressionMemory(summarizer_llm=llm)
+    agent = Agent(
+        llm=llm,
+        system_prompt="system",
+        max_calls=2,
+        max_tokens=10,
+        memory=memory,
+        agent_name="session",
+        tools=[PushOnStopTool()],
+    )
+    agent_ref["agent"] = agent
+
+    await agent.run_async("first run")
+
+    # Second run should NOT see the stale context
+    await agent.run_async("second run")
+
+    second_run_history = llm.calls[1]["history"]
+    texts = [
+        block.text
+        for msg in second_run_history
+        for block in (msg.content if isinstance(msg.content, list) else [])
+        if isinstance(block, TextBlock)
+    ]
+    assert "stale from previous run" not in texts
