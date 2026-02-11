@@ -211,7 +211,11 @@ async def connect_mcp_server(
     connection = MCPServerConnection(command=command, args=args, env=env)
     await connection.connect()
 
-    mcp_tools_raw = await connection.list_tools()
+    try:
+        mcp_tools_raw = await connection.list_tools()
+    except Exception:
+        await connection.disconnect()
+        raise
 
     tools: List[MCPTool] = []
     for t in mcp_tools_raw:
@@ -229,13 +233,18 @@ async def connect_mcp_server(
 async def disconnect_mcp_tools(tools: List[Tool]) -> None:
     """Disconnect all unique MCP server connections found in *tools*.
 
-    Safe to call with a mixed list of ``MCPTool`` and regular ``Tool``
-    instances — non-MCP tools are silently ignored.
+    Safe to call with a mixed list of ``MCPTool``, ``MCPServerConnection``,
+    and regular ``Tool`` instances — non-MCP items are silently ignored.
+    Passing ``MCPServerConnection`` instances directly is useful when the
+    tool list may be empty (e.g. a server that exposes zero tools).
     """
     seen_connections: set = set()
     for t in tools:
-        if isinstance(t, MCPTool):
+        conn: Optional[MCPServerConnection] = None
+        if isinstance(t, MCPServerConnection):
+            conn = t
+        elif isinstance(t, MCPTool):
             conn = t._connection
-            if id(conn) not in seen_connections:
-                seen_connections.add(id(conn))
-                await conn.disconnect()
+        if conn is not None and id(conn) not in seen_connections:
+            seen_connections.add(id(conn))
+            await conn.disconnect()

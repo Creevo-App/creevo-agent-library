@@ -327,6 +327,19 @@ class TestDisconnectMCPTools:
         """No error when called with an empty list."""
         await disconnect_mcp_tools([])
 
+    async def test_accepts_raw_connection(self):
+        """MCPServerConnection instances can be passed directly."""
+        conn = _make_mock_connection()
+        await disconnect_mcp_tools([conn])
+        conn.disconnect.assert_awaited_once()
+
+    async def test_deduplicates_raw_and_tool_connections(self):
+        """Same connection passed both directly and via MCPTool is only disconnected once."""
+        conn = _make_mock_connection()
+        mcp = MCPTool(name="x", description="", input_schema={}, connection=conn)
+        await disconnect_mcp_tools([conn, mcp])
+        conn.disconnect.assert_awaited_once()
+
 
 # ---------------------------------------------------------------------------
 # connect_mcp_server (mocked subprocess)
@@ -356,6 +369,18 @@ class TestConnectMCPServer:
         assert tools[0].name == "resolve_library_id"
         assert tools[0].description == "Resolve a library ID"
         assert tools[0]._connection is mock_conn
+
+    async def test_disconnects_on_list_tools_failure(self):
+        """If list_tools() raises, the connection is cleaned up and the error re-raised."""
+        mock_conn = _make_mock_connection()
+        mock_conn.connect = AsyncMock(return_value=mock_conn)
+        mock_conn.list_tools = AsyncMock(side_effect=RuntimeError("protocol error"))
+
+        with patch("CAL.mcp.MCPServerConnection", return_value=mock_conn):
+            with pytest.raises(RuntimeError, match="protocol error"):
+                await connect_mcp_server(command="npx", args=["-y", "@ctx/mcp"])
+
+        mock_conn.disconnect.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
