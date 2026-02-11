@@ -95,6 +95,43 @@ async def my_tool(param1: str, param2: int):
     }
 ```
 
+### MCP (Model Context Protocol)
+
+Connect to external MCP servers and use their tools inside a CAL agent:
+
+```python
+from CAL import Agent, GeminiLLM, StopTool, FullCompressionMemory
+from CAL.mcp import connect_mcp_server, disconnect_mcp_tools
+
+async def main():
+    # Connect to an MCP server (e.g. Context7)
+    mcp_tools = await connect_mcp_server(command="npx", args=["-y", "@upstash/context7-mcp"])
+
+    agent = Agent(
+        llm=GeminiLLM(model="gemini-2.5-flash", api_key="...", max_tokens=4096),
+        system_prompt="You are a helpful assistant.",
+        max_calls=10,
+        max_tokens=4096,
+        memory=FullCompressionMemory(
+            summarizer_llm=GeminiLLM(model="gemini-2.5-flash", api_key="...", max_tokens=2048),
+            max_tokens=50000,
+        ),
+        agent_name="mcp-agent",
+        tools=[StopTool(), *mcp_tools],
+    )
+
+    result = await agent.run_async("What does React useEffect do?")
+
+    # Clean up MCP server connections
+    await disconnect_mcp_tools(mcp_tools)
+```
+
+Install with MCP support:
+
+```bash
+pip install "creevo-agent-library[mcp] @ git+https://github.com/Creevo-App/creevo-agent-library.git"
+```
+
 ## Documentation
 
 For detailed API documentation, see the source code or contact the Creevo team.
