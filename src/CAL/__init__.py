@@ -45,7 +45,7 @@ __all__ = [
 
 # Optional MCP support — only available when the `mcp` package is installed.
 try:
-    from .mcp import MCPTool, MCPServerConnection, connect_mcp_server, disconnect_mcp_tools
-    __all__ += ['MCPTool', 'MCPServerConnection', 'connect_mcp_server', 'disconnect_mcp_tools']
+    from .mcp import MCPTool, MCPToolList, MCPServerConnection, connect_mcp_server, disconnect_mcp_tools
+    __all__ += ['MCPTool', 'MCPToolList', 'MCPServerConnection', 'connect_mcp_server', 'disconnect_mcp_tools']
 except ImportError:
     pass

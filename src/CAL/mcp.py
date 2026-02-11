@@ -84,6 +84,18 @@ class MCPServerConnection:
         self._session = None
 
 
+class MCPToolList(list):
+    """A list of MCPTool instances that retains a reference to their connection.
+
+    This allows ``disconnect_mcp_tools`` to clean up even when the server
+    returns zero tools.
+    """
+
+    def __init__(self, tools: list, connection: "MCPServerConnection"):
+        super().__init__(tools)
+        self._connection = connection
+
+
 class MCPTool(Tool):
     """Wraps a single MCP server tool as a CAL ``Tool``.
 
@@ -141,8 +153,12 @@ async def connect_mcp_server(
     command: str,
     args: Optional[List[str]] = None,
     env: Optional[Dict[str, str]] = None,
-) -> List[MCPTool]:
-    """Connect to an MCP server and return its tools as ``MCPTool`` instances."""
+) -> MCPToolList:
+    """Connect to an MCP server and return its tools as ``MCPTool`` instances.
+
+    Returns an ``MCPToolList`` which can be iterated like a normal list but
+    also exposes ``_connection`` for cleanup via ``disconnect_mcp_tools``.
+    """
     connection = MCPServerConnection(command=command, args=args, env=env)
     await connection.connect()
     try:
@@ -150,7 +166,7 @@ async def connect_mcp_server(
     except Exception:
         await connection.disconnect()
         raise
-    return [
+    tools = [
         MCPTool(
             name=t.name,
             description=t.description or "",
@@ -159,15 +175,24 @@ async def connect_mcp_server(
         )
         for t in mcp_tools_raw
     ]
+    return MCPToolList(tools, connection)
 
 
 async def disconnect_mcp_tools(tools: list) -> None:
     """Disconnect all unique MCP server connections found in *tools*.
 
-    Accepts ``MCPTool``, ``MCPServerConnection``, or any ``Tool`` (non-MCP
-    items are silently ignored).
+    Accepts ``MCPTool``, ``MCPServerConnection``, ``MCPToolList``, or any
+    ``Tool`` (non-MCP items are silently ignored).
     """
     seen: set = set()
+
+    # If tools is an MCPToolList, extract its connection first
+    if isinstance(tools, MCPToolList):
+        conn = tools._connection
+        if isinstance(conn, MCPServerConnection) and id(conn) not in seen:
+            seen.add(id(conn))
+            await conn.disconnect()
+
     for t in tools:
         conn = t if isinstance(t, MCPServerConnection) else getattr(t, "_connection", None)
         if isinstance(conn, MCPServerConnection) and id(conn) not in seen:

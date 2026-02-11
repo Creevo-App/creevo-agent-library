@@ -8,6 +8,7 @@ from CAL.content_blocks import ImageBlock, TextBlock, ToolResultBlock, ToolUseBl
 from CAL.mcp import (
     MCPServerConnection,
     MCPTool,
+    MCPToolList,
     _map_mcp_content,
     connect_mcp_server,
     disconnect_mcp_tools,
@@ -250,6 +251,29 @@ class TestConnectMCPServer:
             with pytest.raises(RuntimeError, match="protocol error"):
                 await connect_mcp_server(command="npx", args=["-y", "@ctx/mcp"])
 
+        mock_conn.disconnect.assert_awaited_once()
+
+    async def test_empty_tools_returns_mcp_tool_list_with_connection(self):
+        mock_conn = _mock_conn()
+        mock_conn.connect = AsyncMock(return_value=mock_conn)
+        mock_conn.list_tools = AsyncMock(return_value=[])
+
+        with patch("CAL.mcp.MCPServerConnection", return_value=mock_conn):
+            tools = await connect_mcp_server(command="npx", args=["-y", "@ctx/mcp"])
+
+        assert isinstance(tools, MCPToolList)
+        assert len(tools) == 0
+        assert tools._connection is mock_conn
+
+    async def test_disconnect_works_with_empty_mcp_tool_list(self):
+        mock_conn = _mock_conn()
+        mock_conn.connect = AsyncMock(return_value=mock_conn)
+        mock_conn.list_tools = AsyncMock(return_value=[])
+
+        with patch("CAL.mcp.MCPServerConnection", return_value=mock_conn):
+            tools = await connect_mcp_server(command="npx", args=["-y", "@ctx/mcp"])
+
+        await disconnect_mcp_tools(tools)
         mock_conn.disconnect.assert_awaited_once()
 
 
