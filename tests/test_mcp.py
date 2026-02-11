@@ -402,6 +402,24 @@ class TestMCPServerConnection:
         with pytest.raises(RuntimeError, match="not connected"):
             await conn.call_tool("foo", {})
 
+    async def test_connect_cleans_up_on_partial_failure(self):
+        """If session init fails after subprocess starts, exit stack is closed."""
+        conn = MCPServerConnection(command="npx", args=["-y", "pkg"])
+
+        # Simulate: stdio_client succeeds but ClientSession.__aenter__ fails
+        fake_exit_stack = AsyncMock(spec=conn._exit_stack)
+        fake_exit_stack.enter_async_context = AsyncMock(
+            side_effect=[("read", "write"), RuntimeError("session init failed")]
+        )
+        fake_exit_stack.aclose = AsyncMock()
+        conn._exit_stack = fake_exit_stack
+
+        with pytest.raises(RuntimeError, match="session init failed"):
+            await conn.connect()
+
+        fake_exit_stack.aclose.assert_awaited_once()
+        assert conn._session is None
+
 
 # ---------------------------------------------------------------------------
 # Integration test — requires real MCP server (npx + internet)
