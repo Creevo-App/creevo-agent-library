@@ -282,7 +282,9 @@ class Agent:
                 except Exception as e:
                     retries += 1
                     if retries < max_retries:
-                        print(f"LLM error: {e}, retry {retries}/{max_retries}", file=sys.stderr)
+                        delay = min(2 ** (retries - 1), 60)
+                        print(f"LLM error: {e}, retry {retries}/{max_retries} after {delay}s", file=sys.stderr)
+                        await asyncio.sleep(delay)
                         continue
                     raise RuntimeError(f"LLM call failed after {max_retries} retries: {e}") from e
                 
@@ -326,7 +328,9 @@ class Agent:
                     if finish_reason and 'MALFORMED_FUNCTION_CALL' in finish_reason:
                         retries += 1
                         if retries < max_retries:
-                            print(f"MALFORMED_FUNCTION_CALL detected, retry {retries}/{max_retries}", file=sys.stderr)
+                            delay = min(2 ** (retries - 1), 60)
+                            print(f"MALFORMED_FUNCTION_CALL detected, retry {retries}/{max_retries} after {delay}s", file=sys.stderr)
+                            await asyncio.sleep(delay)
                             continue
                         self.memory.add_message(agent_message)
                         print("MALFORMED_FUNCTION_CALL: max retries reached, stopping", file=sys.stderr)
