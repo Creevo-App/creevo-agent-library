@@ -130,6 +130,30 @@ class TestCleanSchema:
         # $ref is a valid Gemini key (mapped as "ref"), $comment is not
         assert "$comment" not in cleaned["anyOf"][1]
 
+    def test_cleans_additional_properties_schema(self):
+        raw = {
+            "type": "object",
+            "additionalProperties": {"type": "string", "$comment": "leak"},
+        }
+        cleaned = _clean_schema(raw)
+        assert "$comment" not in cleaned["additionalProperties"]
+        assert cleaned["additionalProperties"]["type"] == "string"
+
+    def test_additional_properties_bool_passthrough(self):
+        raw = {"type": "object", "additionalProperties": False}
+        assert _clean_schema(raw)["additionalProperties"] is False
+
+    def test_cleans_defs(self):
+        raw = {
+            "type": "object",
+            "defs": {
+                "MyType": {"type": "string", "$id": "bad", "description": "ok"},
+            },
+        }
+        cleaned = _clean_schema(raw)
+        assert "$id" not in cleaned["defs"]["MyType"]
+        assert cleaned["defs"]["MyType"]["description"] == "ok"
+
 
 # -- MCPTool ----------------------------------------------------------------
 

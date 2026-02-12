@@ -33,16 +33,26 @@ _GEMINI_SCHEMA_KEYS = {
 
 def _clean_schema(schema: dict) -> dict:
     """Recursively strip keys that Gemini's FunctionDeclaration rejects."""
+
+    # Keys whose value is a dict of {name: sub-schema} — each sub-schema needs cleaning.
+    _DICT_OF_SCHEMAS_KEYS = {"properties", "defs"}
+
+    # Keys whose value is a single sub-schema dict (or a non-dict like bool) — clean if dict.
+    _SINGLE_SCHEMA_KEYS = {"items", "additionalProperties", "additional_properties"}
+
+    # Keys whose value is a list of sub-schemas — clean each dict entry.
+    _LIST_OF_SCHEMAS_KEYS = {"anyOf", "any_of"}
+
     cleaned = {}
     for key, value in schema.items():
         if key not in _GEMINI_SCHEMA_KEYS:
             continue
-        if key == "properties" and isinstance(value, dict):
+        if key in _DICT_OF_SCHEMAS_KEYS and isinstance(value, dict):
             cleaned[key] = {k: _clean_schema(v) if isinstance(v, dict) else v
                             for k, v in value.items()}
-        elif key == "items" and isinstance(value, dict):
+        elif key in _SINGLE_SCHEMA_KEYS and isinstance(value, dict):
             cleaned[key] = _clean_schema(value)
-        elif key in ("anyOf", "any_of") and isinstance(value, list):
+        elif key in _LIST_OF_SCHEMAS_KEYS and isinstance(value, list):
             cleaned[key] = [_clean_schema(v) if isinstance(v, dict) else v for v in value]
         else:
             cleaned[key] = value
