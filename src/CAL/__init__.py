@@ -42,3 +42,10 @@ __all__ = [
     'CompressionConfig',
     'CompressionArchiver',
 ]
+
+# Optional MCP support — only available when the `mcp` package is installed.
+try:
+    from .mcp import MCPTool, MCPToolList, MCPServerConnection, connect_mcp_server, disconnect_mcp_tools
+    __all__ += ['MCPTool', 'MCPToolList', 'MCPServerConnection', 'connect_mcp_server', 'disconnect_mcp_tools']
+except ImportError:
+    pass
