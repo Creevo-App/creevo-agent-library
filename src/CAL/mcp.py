@@ -152,6 +152,7 @@ class MCPTool(Tool):
         self._connection = connection
 
     def get_schema(self) -> dict:
+        """Return schema in Anthropic tool format."""
         return {
             "name": self.name,
             "description": self.description,
@@ -159,6 +160,7 @@ class MCPTool(Tool):
         }
 
     def gemini_input_form(self):
+        """Convert tool schema to Gemini format."""
         return types.Tool(function_declarations=[
             types.FunctionDeclaration(
                 name=self.name,
