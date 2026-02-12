@@ -17,6 +17,38 @@ from .content_blocks import (
 )
 
 
+# Keys accepted by Gemini's types.Schema (snake_case names and their camelCase aliases).
+_GEMINI_SCHEMA_KEYS = {
+    "type", "description", "properties", "required", "items", "enum",
+    "format", "nullable", "default", "example", "pattern", "title",
+    "minimum", "maximum",
+    "min_items", "minItems", "max_items", "maxItems",
+    "min_length", "minLength", "max_length", "maxLength",
+    "min_properties", "minProperties", "max_properties", "maxProperties",
+    "additional_properties", "additionalProperties",
+    "any_of", "anyOf", "defs", "ref",
+    "property_ordering", "propertyOrdering",
+}
+
+
+def _clean_schema(schema: dict) -> dict:
+    """Recursively strip keys that Gemini's FunctionDeclaration rejects."""
+    cleaned = {}
+    for key, value in schema.items():
+        if key not in _GEMINI_SCHEMA_KEYS:
+            continue
+        if key == "properties" and isinstance(value, dict):
+            cleaned[key] = {k: _clean_schema(v) if isinstance(v, dict) else v
+                            for k, v in value.items()}
+        elif key == "items" and isinstance(value, dict):
+            cleaned[key] = _clean_schema(value)
+        elif key in ("anyOf", "any_of") and isinstance(value, list):
+            cleaned[key] = [_clean_schema(v) if isinstance(v, dict) else v for v in value]
+        else:
+            cleaned[key] = value
+    return cleaned
+
+
 def _map_mcp_content(mcp_content: list) -> List[ContentBlock]:
     """Map MCP result content items to CAL ContentBlock instances."""
     blocks: List[ContentBlock] = []
@@ -107,7 +139,7 @@ class MCPTool(Tool):
                  connection: MCPServerConnection):
         self.name = name
         self.description = description
-        self.input_schema = input_schema
+        self.input_schema = _clean_schema(input_schema)
         self._connection = connection
 
     def get_schema(self) -> dict:

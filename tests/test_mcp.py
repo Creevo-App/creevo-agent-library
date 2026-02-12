@@ -9,6 +9,7 @@ from CAL.mcp import (
     MCPServerConnection,
     MCPTool,
     MCPToolList,
+    _clean_schema,
     _map_mcp_content,
     connect_mcp_server,
     disconnect_mcp_tools,
@@ -96,6 +97,40 @@ class TestMapMCPContent:
         assert _map_mcp_content([]) == []
 
 
+# -- _clean_schema ----------------------------------------------------------
+
+class TestCleanSchema:
+    def test_strips_dollar_schema(self):
+        raw = {"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "properties": {}}
+        assert "$schema" not in _clean_schema(raw)
+        assert _clean_schema(raw)["type"] == "object"
+
+    def test_preserves_valid_keys(self):
+        raw = {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}
+        assert _clean_schema(raw) == raw
+
+    def test_strips_nested_extras(self):
+        raw = {
+            "type": "object",
+            "properties": {
+                "config": {"type": "object", "$id": "bad", "properties": {"k": {"type": "string", "$comment": "x"}}}
+            },
+        }
+        cleaned = _clean_schema(raw)
+        assert "$id" not in cleaned["properties"]["config"]
+        assert "$comment" not in cleaned["properties"]["config"]["properties"]["k"]
+
+    def test_cleans_items(self):
+        raw = {"type": "array", "items": {"type": "string", "$anchor": "x"}}
+        assert "$anchor" not in _clean_schema(raw)["items"]
+
+    def test_cleans_any_of(self):
+        raw = {"anyOf": [{"type": "string", "$ref": "#/defs/a"}, {"type": "integer", "$comment": "b"}]}
+        cleaned = _clean_schema(raw)
+        # $ref is a valid Gemini key (mapped as "ref"), $comment is not
+        assert "$comment" not in cleaned["anyOf"][1]
+
+
 # -- MCPTool ----------------------------------------------------------------
 
 class TestMCPTool:
@@ -104,11 +139,36 @@ class TestMCPTool:
         assert schema["name"] == "search"
         assert schema["input_schema"]["properties"]["query"]["type"] == "string"
 
+    def test_schema_strips_mcp_extras(self):
+        """MCP schemas with $schema etc. are cleaned at construction time."""
+        tool = MCPTool(
+            name="t", description="d",
+            input_schema={"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "properties": {}},
+            connection=_mock_conn(),
+        )
+        assert "$schema" not in tool.input_schema
+        assert "$schema" not in tool.get_schema()["input_schema"]
+
     def test_gemini_input_form(self):
         gemini = _make_tool().gemini_input_form()
         fd = gemini.function_declarations[0]
         assert fd.name == "search"
         assert fd.description == "Search the web"
+
+    def test_gemini_form_with_mcp_schema(self):
+        """FunctionDeclaration doesn't raise with MCP-style schemas after cleaning."""
+        tool = MCPTool(
+            name="resolve", description="Resolve a library",
+            input_schema={
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            },
+            connection=_mock_conn(),
+        )
+        gemini = tool.gemini_input_form()
+        assert gemini.function_declarations[0].name == "resolve"
 
     async def test_execute_text_response(self):
         conn = _mock_conn()
