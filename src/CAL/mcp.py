@@ -112,7 +112,16 @@ class MCPServerConnection:
         return await self._require_session().call_tool(name, arguments)
 
     async def disconnect(self) -> None:
-        await self._exit_stack.aclose()
+        try:
+            await self._exit_stack.aclose()
+        except RuntimeError as e:
+            # In Jupyter notebooks, connect() and disconnect() execute in
+            # different async task contexts.  anyio's cancel scopes require
+            # enter/exit in the same task, so the scope teardown raises a
+            # RuntimeError.  The MCP subprocess is still properly terminated
+            # by stdio_client's finally block; we just suppress the error.
+            if "cancel scope" not in str(e):
+                raise
         self._session = None
 
 
