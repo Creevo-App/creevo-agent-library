@@ -78,9 +78,9 @@ async def main():
 
     try:
         # 2. Create the agent
-        llm = GeminiLLM(model="gemini-3.0-flash", api_key=api_key, max_tokens=4096)
+        llm = GeminiLLM(model="gemini-3-flash-preview", api_key=api_key, max_tokens=4096)
         summarizer_llm = GeminiLLM(
-            model="gemini-3.0-flash", api_key=api_key, max_tokens=2048
+            model="gemini-3-flash-preview", api_key=api_key, max_tokens=2048
         )
 
         agent = Agent(
