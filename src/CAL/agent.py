@@ -341,6 +341,9 @@ class Agent:
                         break
                 
 
+                # Successful LLM response — reset backoff streak
+                error_streak = 0
+
                 # Step 2: Add agent message to conversation history
                 self.memory.add_message(agent_message)
                 
@@ -365,7 +368,6 @@ class Agent:
                 
                 # Reset retries on successful tool use
                 retries = 0
-                error_streak = 0
                 
                 emit_progress(
                     self.agent_name,
