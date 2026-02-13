@@ -222,6 +222,7 @@ class Agent:
         # Unified retry counter for all recoverable errors (LLM errors, malformed calls, no tool calls)
         max_retries = 10
         retries = 0
+        error_streak = 0  # consecutive API errors, used for backoff delay calculation
         
         emit_progress(self.agent_name, "start", "Got your request, analyzing your game idea...")
         
@@ -281,8 +282,9 @@ class Agent:
                     )
                 except Exception as e:
                     retries += 1
+                    error_streak += 1
                     if retries < max_retries:
-                        delay = min(2 ** (retries - 1), 60)
+                        delay = min(2 ** (error_streak - 1), 60)
                         print(f"LLM error: {e}, retry {retries}/{max_retries} after {delay}s", file=sys.stderr)
                         await asyncio.sleep(delay)
                         continue
@@ -327,8 +329,9 @@ class Agent:
                     # Handle MALFORMED_FUNCTION_CALL by retrying
                     if finish_reason and 'MALFORMED_FUNCTION_CALL' in finish_reason:
                         retries += 1
+                        error_streak += 1
                         if retries < max_retries:
-                            delay = min(2 ** (retries - 1), 60)
+                            delay = min(2 ** (error_streak - 1), 60)
                             print(f"MALFORMED_FUNCTION_CALL detected, retry {retries}/{max_retries} after {delay}s", file=sys.stderr)
                             await asyncio.sleep(delay)
                             continue
@@ -362,6 +365,7 @@ class Agent:
                 
                 # Reset retries on successful tool use
                 retries = 0
+                error_streak = 0
                 
                 emit_progress(
                     self.agent_name,
