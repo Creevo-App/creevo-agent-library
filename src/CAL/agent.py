@@ -222,6 +222,7 @@ class Agent:
         # Unified retry counter for all recoverable errors (LLM errors, malformed calls, no tool calls)
         max_retries = 10
         retries = 0
+        error_streak = 0  # consecutive API errors, used for backoff delay calculation
         
         emit_progress(self.agent_name, "start", "Got your request, analyzing your game idea...")
         
@@ -281,8 +282,11 @@ class Agent:
                     )
                 except Exception as e:
                     retries += 1
+                    error_streak += 1
                     if retries < max_retries:
-                        print(f"LLM error: {e}, retry {retries}/{max_retries}", file=sys.stderr)
+                        delay = min(2 ** (error_streak - 1), 60)
+                        print(f"LLM error: {e}, retry {retries}/{max_retries} after {delay}s", file=sys.stderr)
+                        await asyncio.sleep(delay)
                         continue
                     raise RuntimeError(f"LLM call failed after {max_retries} retries: {e}") from e
                 
@@ -325,14 +329,20 @@ class Agent:
                     # Handle MALFORMED_FUNCTION_CALL by retrying
                     if finish_reason and 'MALFORMED_FUNCTION_CALL' in finish_reason:
                         retries += 1
+                        error_streak += 1
                         if retries < max_retries:
-                            print(f"MALFORMED_FUNCTION_CALL detected, retry {retries}/{max_retries}", file=sys.stderr)
+                            delay = min(2 ** (error_streak - 1), 60)
+                            print(f"MALFORMED_FUNCTION_CALL detected, retry {retries}/{max_retries} after {delay}s", file=sys.stderr)
+                            await asyncio.sleep(delay)
                             continue
                         self.memory.add_message(agent_message)
                         print("MALFORMED_FUNCTION_CALL: max retries reached, stopping", file=sys.stderr)
                         workflow_status = "error_malformed_function_call"
                         break
                 
+
+                # Successful LLM response — reset backoff streak
+                error_streak = 0
 
                 # Step 2: Add agent message to conversation history
                 self.memory.add_message(agent_message)
