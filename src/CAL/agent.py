@@ -1,22 +1,36 @@
 """
-Agent classes for CAL with OpenTelemetry tracing
+Agent classes for CAL with OpenTelemetry tracing.
 """
-import os
-import time
-import sys
-import json
 import asyncio
+import json
 import queue
-from typing import List, Optional
+import sys
+import time
+import uuid
+from typing import Any, Dict, List, Optional
 
-from .logger import Logger
+from .content_blocks import TextBlock, ToolResultBlock, ToolUseBlock
 from .llm import LLM
-from .tool import Tool
-from .message import Message, MessageRole
-from .content_blocks import ToolResultBlock, TextBlock, ToolUseBlock
+from .logger import Logger
 from .memory import Memory
+from .memory_engine import (
+    CompositeMemoryObserver,
+    ContextPolicy,
+    ContextRequest,
+    DefaultMemoryEngine,
+    LoggerMemoryObserver,
+    MemoryEngine,
+    NullMemoryObserver,
+    OTelMemoryObserver,
+    TurnRecord,
+    estimate_system_tokens,
+    estimate_tool_schema_tokens,
+)
+from .message import Message, MessageRole
+from .tool import Tool
 
 PROGRESS_PREFIX = "__AGENT_PROGRESS__"
+
 
 def emit_progress(agent_name: str, event: str, message: str, detail: dict = None):
     """Emit a progress event to stdout for Node.js to capture and forward to frontend."""
@@ -31,29 +45,24 @@ def emit_progress(agent_name: str, event: str, message: str, detail: dict = None
 
 
 class Agent:
-    """Agent class with custom tracing"""
-    
+    """Agent class with legacy and v2 memory-engine execution paths."""
+
     def __init__(
         self,
         llm: LLM,
         system_prompt: str,
         max_calls: int,
         max_tokens: int,
-        memory: Memory,
-        agent_name: str,
+        memory: Optional[Memory] = None,
+        agent_name: str = "session",
         tools: Optional[List[Tool]] = None,
         logger: Optional[Logger] = None,
+        memory_engine: Optional[MemoryEngine] = None,
+        context_policy: Optional[ContextPolicy] = None,
+        thread_id: Optional[str] = None,
+        resource_id: Optional[str] = None,
     ):
-        """
-        Initialize the agent.
-        
-        Args:
-            llm: The LLM instance to use
-            system_prompt: System prompt for the agent
-            max_calls: Maximum number of tool calls allowed
-            max_tokens: Maximum tokens for generation
-            tools: Optional list of tools to register with the agent
-        """
+        """Initialize the agent."""
         self.llm = llm
         self.tools: List[Tool] = tools if tools is not None else []
         self.system_prompt = system_prompt
@@ -64,121 +73,122 @@ class Agent:
         self.logger = logger
         self._context_queue = queue.Queue()
 
+        self.context_policy = context_policy or ContextPolicy(total_token_budget=max(1024, max_tokens * 12))
+        self.thread_id = thread_id or agent_name
+        self.resource_id = resource_id or agent_name
+
+        self.memory_engine = memory_engine
+        if self.memory_engine is None and self.memory is None:
+            # v2-first default if caller omits both
+            self.memory_engine = DefaultMemoryEngine(context_policy=self.context_policy)
+
+        if isinstance(self.memory_engine, DefaultMemoryEngine):
+            observer_chain = []
+            if self.logger is not None:
+                observer_chain.append(LoggerMemoryObserver(self.logger))
+            observer_chain.append(OTelMemoryObserver())
+            if observer_chain:
+                current_observer = self.memory_engine.observer
+                if isinstance(current_observer, NullMemoryObserver):
+                    self.memory_engine.observer = CompositeMemoryObserver(observer_chain)
+                else:
+                    self.memory_engine.observer = CompositeMemoryObserver([current_observer] + observer_chain)
+
+        self._latest_thread_messages: List[Message] = []
+
         # Bind SubAgentTools to this agent for context access
-        # We do the import here at runtime to avoid circular imports at module load time
         from .subagent import SubAgentTool
+
         for tool in self.tools:
             if isinstance(tool, SubAgentTool):
                 tool.bind_parent(self)
 
-        # Initialize logger metadata
         if self.logger:
-            self.logger.log_metadata({
-                "system_prompt": self.system_prompt,
-                "agent_name": self.agent_name
-            })
-        
+            self.logger.log_metadata(
+                {
+                    "system_prompt": self.system_prompt,
+                    "agent_name": self.agent_name,
+                    "thread_id": self.thread_id,
+                    "resource_id": self.resource_id,
+                    "memory_mode": "v2" if self.memory_engine is not None else "legacy",
+                }
+            )
+
     def register_tool(self, tool: Tool):
-        """
-        Register a tool with the agent.
-        
-        Args:
-            tool: The tool to register
-        """
+        """Register a tool with the agent."""
         self.tools.append(tool)
-    
+
     @property
     def conversation_history(self) -> List[Message]:
         """Expose current conversation history."""
+        if self.memory_engine is not None and self.memory is None:
+            return list(self._latest_thread_messages)
         return self.memory.get_history()
-    
-    
+
     def _history_json(self) -> str:
-        """Return the serialized conversation history."""
-        return self.memory.to_json()
-    
+        """Return serialized conversation history."""
+        history = self.conversation_history
+        payload = [
+            {
+                "role": msg.role.value,
+                "content": str(msg.content),
+                "usage": msg.usage,
+                "metadata": msg.metadata,
+            }
+            for msg in history
+        ]
+        return json.dumps(payload, ensure_ascii=True)
+
     def _parse_tool_uses(self, message: Message) -> List[ToolUseBlock]:
-        """
-        Extract ToolUseBlocks from message content.
-        
-        Args:
-            message: The message to parse
-            
-        Returns:
-            List of ToolUseBlock objects
-        """
+        """Extract ToolUseBlocks from message content."""
         tool_uses = []
         if isinstance(message.content, list):
             for block in message.content:
                 if isinstance(block, ToolUseBlock):
                     tool_uses.append(block)
         return tool_uses
-    
+
     def _find_tool(self, name: str) -> Optional[Tool]:
-        """
-        Find a tool by name in the registry.
-        Normalizes names by replacing hyphens with underscores for matching.
-        
-        Args:
-            name: Name of the tool to find
-            
-        Returns:
-            Tool instance or None if not found
-        """
-        normalized_name = name.replace('-', '_')
+        """Find a tool by name in the registry."""
+        normalized_name = name.replace("-", "_")
         for tool in self.tools:
-            if tool.name.replace('-', '_') == normalized_name:
+            if tool.name.replace("-", "_") == normalized_name:
                 return tool
         return None
-    
+
     async def _execute_tools(self, tool_uses: List[ToolUseBlock]) -> List[ToolResultBlock]:
-        """
-        Execute tools and return results.
-        Captures start/end times for each tool execution.
-        """
+        """Execute tools and return results."""
         results = []
         for tool_use in tool_uses:
             tool = self._find_tool(tool_use.name)
-            
             start_time = time.time_ns()
-            
+
             if tool is None:
                 result = ToolResultBlock(
                     tool_use_id=tool_use.id,
                     content=f"Error: Tool '{tool_use.name}' not found",
                     is_error=True,
-                    name=tool_use.name
+                    name=tool_use.name,
                 )
             else:
                 result = await tool.execute(tool_use_id=tool_use.id, **tool_use.input)
-            
+
             end_time = time.time_ns()
-            
-            # Log tool response
             if self.logger:
-                self.logger.log_tool_response(
-                    tool_use, 
-                    result,
-                    start_time=start_time,
-                    end_time=end_time
-                )
-                
+                self.logger.log_tool_response(tool_use, result, start_time=start_time, end_time=end_time)
             results.append(result)
-        
         return results
 
     def _extract_final_output(self) -> str:
-        """Helper to find the last meaningful output for the trace result. If no output is found, return an empty string."""
-        # Check reverse history for the most recent relevant result
-        for message in reversed(self.memory.get_history()):
+        """Find the most recent tool output metadata marker or fallback."""
+        history = self.conversation_history
+        for message in reversed(history):
             if message.role == MessageRole.USER and isinstance(message.content, list):
                 for block in message.content:
-                    if isinstance(block, ToolResultBlock) and block.metadata:
-                        if "full_span_output" in block.metadata:
-                            return block.metadata["full_span_output"]
-                    
+                    if isinstance(block, ToolResultBlock) and block.metadata and "full_span_output" in block.metadata:
+                        return block.metadata["full_span_output"]
         return ""
-    
+
     def _has_tool_calls(self, message: Message) -> bool:
         """Check if a message contains tool calls."""
         if message.role != MessageRole.ASSISTANT:
@@ -186,64 +196,288 @@ class Agent:
         if isinstance(message.content, str):
             return False
         return any(isinstance(block, ToolUseBlock) for block in message.content)
-    
+
     def push_context(self, context: str) -> None:
-        """Push additional context into the agent. Thread-safe.
-        Injected as a USER message before the next LLM call."""
+        """Push additional context into the agent. Thread-safe."""
         self._context_queue.put(context)
 
+    def _drain_context_queue(self) -> List[str]:
+        pushed: List[str] = []
+        while True:
+            try:
+                pushed.append(self._context_queue.get_nowait())
+            except queue.Empty:
+                break
+        return pushed
+
     def _cleanup_incomplete_conversation(self):
-        """
-        Remove incomplete conversation sequences from memory.
-        If the last message is an assistant message with tool calls,
-        remove it since it's incomplete (no tool responses followed).
-        """
+        """Legacy cleanup for incomplete assistant tool-call messages."""
+        if self.memory is None:
+            return
+
         history = self.memory.get_history()
         if not history:
             return
-        
+
         last_message = history[-1]
         if self._has_tool_calls(last_message):
-            # Remove the incomplete assistant message with tool calls
-            # This can happen if conversation history was saved mid-execution
             self.memory._messages.pop()
-    
-    
-    async def run_async(self, user_prompt: str) -> Message:
-        """
-        Run the agent with the given user prompt (async version).
-        Implements agentic loop: LLM -> Tool -> LLM -> ...
-        """
-        assert self.max_calls > 0, "max_calls must be positive"
-        
-        # Clean up any incomplete conversation sequences (e.g., from mid-execution saves)
-        self._cleanup_incomplete_conversation()
 
-        # Unified retry counter for all recoverable errors (LLM errors, malformed calls, no tool calls)
+    async def _record_v2_turn(
+        self,
+        run_id: str,
+        seq: int,
+        message: Message,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        turn_id = f"{run_id}:{seq:04d}"
+        turn = TurnRecord(
+            run_id=run_id,
+            turn_id=turn_id,
+            thread_id=self.thread_id,
+            resource_id=self.resource_id,
+            message=message,
+            metadata=metadata or {},
+        )
+        await self.memory_engine.record_turn(turn)
+        self._latest_thread_messages = await self.memory_engine.get_thread_turns(self.thread_id)
+        return seq + 1
+
+    async def _run_async_v2(self, user_prompt: str) -> Message:
+        """Run the v2 memory-engine based loop."""
+        assert self.max_calls > 0, "max_calls must be positive"
+        run_id = uuid.uuid4().hex
         max_retries = 10
         retries = 0
-        
+
         emit_progress(self.agent_name, "start", "Got your request, analyzing your game idea...")
-        
-        # Start Trace
+
         if self.logger:
             self.logger.start_trace("agent.run", user_prompt)
 
-        # Add user message to conversation history
+        iteration = 0
+        turn_seq = 0
+        last_agent_message: Optional[Message] = None
+        workflow_status = "completed_success"
+
+        user_message = Message(role=MessageRole.USER, content=[TextBlock(text=user_prompt)])
+        turn_seq = await self._record_v2_turn(run_id, turn_seq, user_message, metadata={"event": "initial_prompt"})
+
+        try:
+            while iteration < self.max_calls:
+                pushed_contexts = self._drain_context_queue()
+                for context_text in pushed_contexts:
+                    context_message = Message(role=MessageRole.USER, content=[TextBlock(text=context_text)])
+                    turn_seq = await self._record_v2_turn(
+                        run_id,
+                        turn_seq,
+                        context_message,
+                        metadata={"event": "pushed_context"},
+                    )
+
+                emit_progress(
+                    self.agent_name,
+                    "llm_start",
+                    f"Step {iteration + 1}: Thinking...",
+                    {"iteration": iteration},
+                )
+                llm_start_time = time.time_ns()
+
+                context_query = user_prompt
+                if pushed_contexts:
+                    context_query = f"{context_query}\n\nExternal context:\n" + "\n".join(pushed_contexts)
+
+                context_request = ContextRequest(
+                    run_id=run_id,
+                    turn_id=f"{run_id}:ctx:{iteration:04d}",
+                    agent_name=self.agent_name,
+                    thread_id=self.thread_id,
+                    resource_id=self.resource_id,
+                    query=context_query,
+                    policy=self.context_policy,
+                    system_prompt_tokens=estimate_system_tokens(self.system_prompt),
+                    tool_schema_tokens=estimate_tool_schema_tokens(self.tools),
+                )
+                context_packet = await self.memory_engine.build_context(context_request)
+
+                try:
+                    agent_message = self.llm.generate_content(
+                        self.system_prompt,
+                        context_packet.messages,
+                        self.tools,
+                    )
+                except Exception as exc:
+                    retries += 1
+                    if retries < max_retries:
+                        print(f"LLM error: {exc}, retry {retries}/{max_retries}", file=sys.stderr)
+                        continue
+                    raise RuntimeError(f"LLM call failed after {max_retries} retries: {exc}") from exc
+
+                llm_end_time = time.time_ns()
+                last_agent_message = agent_message
+
+                emit_progress(
+                    self.agent_name,
+                    "llm_end",
+                    f"Step {iteration + 1}: Planning complete.",
+                    {
+                        "iteration": iteration,
+                        "context_tokens": context_packet.total_tokens,
+                        "context_truncated": context_packet.truncated,
+                        "context_degraded_mode": context_packet.degraded_mode,
+                    },
+                )
+
+                if self.logger:
+                    self.logger.log_llm_response(
+                        agent_message,
+                        iteration,
+                        model=self.llm.name,
+                        provider=self.llm.provider,
+                        start_time=llm_start_time,
+                        end_time=llm_end_time,
+                    )
+
+                turn_seq = await self._record_v2_turn(
+                    run_id,
+                    turn_seq,
+                    agent_message,
+                    metadata={
+                        "iteration": iteration,
+                        "context_tokens": context_packet.total_tokens,
+                        "token_usage_by_source": context_packet.token_usage_by_source,
+                    },
+                )
+
+                if hasattr(agent_message, "metadata") and agent_message.metadata:
+                    finish_reason = agent_message.metadata.get("finish_reason")
+                    if finish_reason and "MAX_TOKENS" in str(finish_reason):
+                        workflow_status = "completed_max_tokens"
+                        print("Hit MAX_TOKENS, stopping agent loop", file=sys.stderr)
+                        break
+                    if finish_reason and "MALFORMED_FUNCTION_CALL" in str(finish_reason):
+                        retries += 1
+                        if retries < max_retries:
+                            print(f"MALFORMED_FUNCTION_CALL detected, retry {retries}/{max_retries}", file=sys.stderr)
+                            continue
+                        workflow_status = "error_malformed_function_call"
+                        break
+
+                tool_uses = self._parse_tool_uses(agent_message)
+                if not tool_uses:
+                    workflow_status = "completed_no_tools"
+                    break
+
+                retries = 0
+                emit_progress(
+                    self.agent_name,
+                    "tool_start",
+                    f"Step {iteration + 1}: Running tools...",
+                    {"iteration": iteration, "tools": [tu.name for tu in tool_uses]},
+                )
+
+                tool_results = await self._execute_tools(tool_uses)
+
+                emit_progress(
+                    self.agent_name,
+                    "tool_end",
+                    f"Step {iteration + 1}: Tools complete.",
+                    {"iteration": iteration, "tools": [tu.name for tu in tool_uses]},
+                )
+
+                tool_message = Message(role=MessageRole.USER, content=tool_results)
+                turn_seq = await self._record_v2_turn(
+                    run_id,
+                    turn_seq,
+                    tool_message,
+                    metadata={"iteration": iteration, "event": "tool_results"},
+                )
+
+                if any(tu.name == "stop" for tu in tool_uses):
+                    workflow_status = "completed_stop"
+                    break
+
+                iteration += 1
+
+            if iteration >= self.max_calls:
+                workflow_status = "completed_max_iterations"
+
+        except Exception as exc:
+            workflow_status = f"error: {str(exc)}"
+            raise
+        finally:
+            status_msg = {
+                "completed_success": "Game ready soon – finalizing details...",
+                "completed_no_tools": "Finished reasoning about your game.",
+                "completed_max_tokens": "Reached internal limit, finishing up...",
+                "completed_max_iterations": "Finished maximum number of planning steps.",
+                "completed_stop": "Completed building your game!",
+                "error_malformed_function_call": "Encountered an error, finishing up...",
+            }.get(workflow_status, "Wrapping up...")
+
+            emit_progress(
+                self.agent_name,
+                "complete",
+                status_msg,
+                {"workflow_status": workflow_status},
+            )
+
+            if self.logger:
+                final_output = self._extract_final_output()
+                if not final_output and last_agent_message:
+                    content = last_agent_message.content
+                    if isinstance(content, list):
+                        parts = []
+                        for block in content:
+                            if hasattr(block, "text"):
+                                parts.append(block.text)
+                            else:
+                                parts.append(str(block))
+                        final_output = " ".join(parts)
+                    else:
+                        final_output = str(content)
+
+                self.logger.end_trace(
+                    output=str(final_output),
+                    metadata={
+                        "status": workflow_status,
+                        "total_iterations": iteration,
+                        "thread_id": self.thread_id,
+                        "resource_id": self.resource_id,
+                        "memory_mode": "v2",
+                    },
+                )
+
+            while not self._context_queue.empty():
+                self._context_queue.get_nowait()
+
+        if last_agent_message is None:
+            return Message(role=MessageRole.ASSISTANT, content=[TextBlock(text="")])
+        return last_agent_message
+
+    async def _run_async_legacy(self, user_prompt: str) -> Message:
+        """Legacy execution path based on FullCompressionMemory behavior."""
+        assert self.max_calls > 0, "max_calls must be positive"
+
+        self._cleanup_incomplete_conversation()
+
+        max_retries = 10
+        retries = 0
+
+        emit_progress(self.agent_name, "start", "Got your request, analyzing your game idea...")
+
+        if self.logger:
+            self.logger.start_trace("agent.run", user_prompt)
+
         user_message = Message(role=MessageRole.USER, content=[TextBlock(text=user_prompt)])
         self.memory.add_message(user_message)
-        
+
         iteration = 0
         last_agent_message = None
         workflow_status = "completed_success"
-        
+
         try:
             while iteration < self.max_calls:
-
-                # Drain any externally pushed context.
-                # Appends to the last message when it's already USER-role
-                # (e.g. after tool results) to avoid consecutive USER messages
-                # which violate Gemini's strict role alternation.
                 pushed_blocks = []
                 while True:
                     try:
@@ -259,44 +493,35 @@ class Agent:
                         else:
                             last_msg.content = [TextBlock(text=last_msg.content)] + pushed_blocks
                     else:
-                        self.memory.add_message(
-                            Message(role=MessageRole.USER, content=pushed_blocks)
-                        )
+                        self.memory.add_message(Message(role=MessageRole.USER, content=pushed_blocks))
 
-                # Step 1: Generate LLM response with Timing
                 emit_progress(
                     self.agent_name,
                     "llm_start",
                     f"Step {iteration + 1}: Thinking...",
-                    {"iteration": iteration}
+                    {"iteration": iteration},
                 )
                 llm_start_time = time.time_ns()
-                
-                # Attempt LLM call with retry on errors
+
                 try:
-                    agent_message = self.llm.generate_content(
-                        self.system_prompt,
-                        self.memory.get_history(),
-                        self.tools,
-                    )
-                except Exception as e:
+                    agent_message = self.llm.generate_content(self.system_prompt, self.memory.get_history(), self.tools)
+                except Exception as exc:
                     retries += 1
                     if retries < max_retries:
-                        print(f"LLM error: {e}, retry {retries}/{max_retries}", file=sys.stderr)
+                        print(f"LLM error: {exc}, retry {retries}/{max_retries}", file=sys.stderr)
                         continue
-                    raise RuntimeError(f"LLM call failed after {max_retries} retries: {e}") from e
-                
+                    raise RuntimeError(f"LLM call failed after {max_retries} retries: {exc}") from exc
+
                 llm_end_time = time.time_ns()
                 last_agent_message = agent_message
-                
+
                 emit_progress(
                     self.agent_name,
                     "llm_end",
                     f"Step {iteration + 1}: Planning complete.",
-                    {"iteration": iteration}
+                    {"iteration": iteration},
                 )
-                
-                # Log LLM response
+
                 if self.logger:
                     self.logger.log_llm_response(
                         agent_message,
@@ -304,26 +529,21 @@ class Agent:
                         model=self.llm.name,
                         provider=self.llm.provider,
                         start_time=llm_start_time,
-                        end_time=llm_end_time
+                        end_time=llm_end_time,
                     )
 
-                # Sync memory token count with actual LLM usage.
-                # This ensures compression triggers based on real context size (including
-                # system prompt and tool schemas), not just estimated message content tokens.
-                if agent_message.usage and 'prompt_tokens' in agent_message.usage:
-                    self.memory.sync_token_count_from_llm_usage(agent_message.usage['prompt_tokens'])
+                if agent_message.usage and "prompt_tokens" in agent_message.usage:
+                    self.memory.sync_token_count_from_llm_usage(agent_message.usage["prompt_tokens"])
 
-                # Check for error finish reasons before adding to history
-                if hasattr(agent_message, 'metadata') and agent_message.metadata:
-                    finish_reason = agent_message.metadata.get('finish_reason')
-                    if finish_reason and 'MAX_TOKENS' in finish_reason:
+                if hasattr(agent_message, "metadata") and agent_message.metadata:
+                    finish_reason = agent_message.metadata.get("finish_reason")
+                    if finish_reason and "MAX_TOKENS" in finish_reason:
                         self.memory.add_message(agent_message)
                         workflow_status = "completed_max_tokens"
                         print("Hit MAX_TOKENS, stopping agent loop", file=sys.stderr)
                         break
-                    
-                    # Handle MALFORMED_FUNCTION_CALL by retrying
-                    if finish_reason and 'MALFORMED_FUNCTION_CALL' in finish_reason:
+
+                    if finish_reason and "MALFORMED_FUNCTION_CALL" in finish_reason:
                         retries += 1
                         if retries < max_retries:
                             print(f"MALFORMED_FUNCTION_CALL detected, retry {retries}/{max_retries}", file=sys.stderr)
@@ -332,22 +552,24 @@ class Agent:
                         print("MALFORMED_FUNCTION_CALL: max retries reached, stopping", file=sys.stderr)
                         workflow_status = "error_malformed_function_call"
                         break
-                
 
-                # Step 2: Add agent message to conversation history
                 self.memory.add_message(agent_message)
-                
-                # Step 3: Parse tool uses
                 tool_uses = self._parse_tool_uses(agent_message)
-                
-                # If no tools returned but stop hasn't been called, prompt the LLM to continue
+
                 if not tool_uses:
                     retries += 1
                     if retries < max_retries:
                         print(f"No tool calls returned, prompting to continue ({retries}/{max_retries})", file=sys.stderr)
                         prompt_message = Message(
-                            role=MessageRole.USER, 
-                            content=[TextBlock(text="Continue with your task. You must use tool calls to make progress. When you are done, use the stop tool.")]
+                            role=MessageRole.USER,
+                            content=[
+                                TextBlock(
+                                    text=(
+                                        "Continue with your task. You must use tool calls to make progress. "
+                                        "When you are done, use the stop tool."
+                                    )
+                                )
+                            ],
                         )
                         self.memory.add_message(prompt_message)
                         iteration += 1
@@ -355,52 +577,42 @@ class Agent:
                     print("No tool calls after max prompts, stopping", file=sys.stderr)
                     workflow_status = "completed_no_tools"
                     break
-                
-                # Reset retries on successful tool use
+
                 retries = 0
-                
+
                 emit_progress(
                     self.agent_name,
                     "tool_start",
                     f"Step {iteration + 1}: Running tools...",
-                    {
-                        "iteration": iteration,
-                        "tools": [tu.name for tu in tool_uses],
-                    }
+                    {"iteration": iteration, "tools": [tu.name for tu in tool_uses]},
                 )
-                
-                # Step 4: Execute tools (Internal logic handles timing logging)
+
                 tool_results = await self._execute_tools(tool_uses)
-                
+
                 emit_progress(
                     self.agent_name,
                     "tool_end",
                     f"Step {iteration + 1}: Tools complete.",
-                    {
-                        "iteration": iteration,
-                        "tools": [tu.name for tu in tool_uses],
-                    }
+                    {"iteration": iteration, "tools": [tu.name for tu in tool_uses]},
                 )
-                
-                # Step 5: Check if stop was called
+
                 stop_called = any(tu.name == "stop" for tu in tool_uses)
-                
-                # Step 6: Add results to history
+
                 tool_message = Message(role=MessageRole.USER, content=tool_results)
                 self.memory.add_message(tool_message)
-                
+
                 if stop_called:
                     workflow_status = "completed_stop"
                     break
-                
+
                 iteration += 1
-                
+
             if iteration >= self.max_calls:
                 workflow_status = "completed_max_iterations"
-                
-        except Exception as e:
-            workflow_status = f"error: {str(e)}"
-            raise e
+
+        except Exception as exc:
+            workflow_status = f"error: {str(exc)}"
+            raise
         finally:
             status_msg = {
                 "completed_success": "Game ready soon – finalizing details...",
@@ -411,54 +623,44 @@ class Agent:
                 "error_malformed_function_call": "Encountered an error, finishing up...",
             }.get(workflow_status, "Wrapping up...")
 
-            emit_progress(
-                self.agent_name,
-                "complete",
-                status_msg,
-                {"workflow_status": workflow_status}
-            )
-            
-            # End Trace
+            emit_progress(self.agent_name, "complete", status_msg, {"workflow_status": workflow_status})
+
             if self.logger:
                 final_output = self._extract_final_output()
-                
-                # Fallback: if extractor failed but we have a message, try to stringify safely
                 if not final_output and last_agent_message:
-                     content = last_agent_message.content
-                     if isinstance(content, list):
-                         # Robust string extraction from blocks
-                         parts = []
-                         for x in content:
-                             if hasattr(x, 'text'):
-                                 parts.append(x.text)
-                             else:
-                                 parts.append(str(x))
-                         final_output = " ".join(parts)
-                     else:
-                         final_output = str(content)
+                    content = last_agent_message.content
+                    if isinstance(content, list):
+                        parts = []
+                        for x in content:
+                            if hasattr(x, "text"):
+                                parts.append(x.text)
+                            else:
+                                parts.append(str(x))
+                        final_output = " ".join(parts)
+                    else:
+                        final_output = str(content)
 
                 self.logger.end_trace(
                     output=str(final_output),
-                    metadata={
-                        "status": workflow_status,
-                        "total_iterations": iteration
-                    }
+                    metadata={"status": workflow_status, "total_iterations": iteration, "memory_mode": "legacy"},
                 )
 
-            # Discard any context pushed after the last drain so it doesn't
-            # leak into a subsequent run_async call on the same agent.
             while not self._context_queue.empty():
                 self._context_queue.get_nowait()
 
-        # last_agent_message is guaranteed to be set since max_calls > 0
         return last_agent_message
 
+    async def run_async(self, user_prompt: str) -> Message:
+        """Run agent asynchronously using v2 memory engine when configured."""
+        if self.memory_engine is not None and self.memory is None:
+            return await self._run_async_v2(user_prompt)
+        if self.memory_engine is not None and self.memory is not None:
+            # If both are set, prefer v2 engine explicitly.
+            return await self._run_async_v2(user_prompt)
+        return await self._run_async_legacy(user_prompt)
 
     def run(self, user_prompt: str) -> Message:
-        """
-        Sync wrapper for run_async.
-        Safely handles existing event loops to prevent RuntimeError.
-        """
+        """Sync wrapper for run_async."""
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -469,8 +671,8 @@ class Agent:
                 "Agent.run() was called from a running event loop. "
                 "Use 'await agent.run_async()' instead."
             )
-        
+
         try:
             return asyncio.run(self.run_async(user_prompt))
-        except Exception as e:
-            raise RuntimeError(f"Agent execution failed: {e}") from e
+        except Exception as exc:
+            raise RuntimeError(f"Agent execution failed: {exc}") from exc
