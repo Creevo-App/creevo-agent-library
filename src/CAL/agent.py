@@ -224,7 +224,7 @@ class Agent:
         retries = 0
         error_streak = 0  # consecutive API errors, used for backoff delay calculation
         
-        emit_progress(self.agent_name, "start", "Got your request, analyzing your game idea...")
+        emit_progress(self.agent_name, "start", "Got your request, analyzing...")
         
         # Start Trace
         if self.logger:
@@ -413,11 +413,11 @@ class Agent:
             raise e
         finally:
             status_msg = {
-                "completed_success": "Game ready soon – finalizing details...",
-                "completed_no_tools": "Finished reasoning about your game.",
+                "completed_success": "Almost done – finalizing...",
+                "completed_no_tools": "Finished reasoning.",
                 "completed_max_tokens": "Reached internal limit, finishing up...",
                 "completed_max_iterations": "Finished maximum number of planning steps.",
-                "completed_stop": "Completed building your game!",
+                "completed_stop": "Task completed.",
                 "error_malformed_function_call": "Encountered an error, finishing up...",
             }.get(workflow_status, "Wrapping up...")
 
