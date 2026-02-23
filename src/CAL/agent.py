@@ -319,13 +319,19 @@ class Agent:
                         end_time=llm_end_time,
                     )
 
-                # Check for error conditions BEFORE persisting to avoid
-                # polluting the conversation store with malformed responses.
+                # Check for error/limit conditions before persisting.
+                # MAX_TOKENS: persist the (partial) response, then stop.
+                # MALFORMED_FUNCTION_CALL: skip persistence on retries to avoid
+                # polluting the conversation store; only persist on final failure.
                 if hasattr(agent_message, "metadata") and agent_message.metadata:
                     finish_reason = agent_message.metadata.get("finish_reason")
                     if finish_reason and "MAX_TOKENS" in str(finish_reason):
                         workflow_status = "completed_max_tokens"
                         print("Hit MAX_TOKENS, stopping agent loop", file=sys.stderr)
+                        turn_seq = await self._record_v2_turn(
+                            run_id, turn_seq, agent_message,
+                            metadata={"iteration": iteration, "event": "max_tokens"},
+                        )
                         break
                     if finish_reason and "MALFORMED_FUNCTION_CALL" in str(finish_reason):
                         retries += 1
@@ -335,6 +341,11 @@ class Agent:
                             print(f"MALFORMED_FUNCTION_CALL detected, retry {retries}/{max_retries} after {delay}s", file=sys.stderr)
                             await asyncio.sleep(delay)
                             continue
+                        # Final failure — persist so the response is visible for debugging
+                        turn_seq = await self._record_v2_turn(
+                            run_id, turn_seq, agent_message,
+                            metadata={"iteration": iteration, "event": "malformed_function_call"},
+                        )
                         workflow_status = "error_malformed_function_call"
                         break
 
