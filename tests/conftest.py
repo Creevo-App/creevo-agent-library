@@ -16,7 +16,6 @@ load_dotenv(Path(__file__).parent / ".env")
 from CAL.content_blocks import TextBlock, ToolResultBlock, ToolUseBlock
 from CAL.llm import LLM
 from CAL.logger import Logger
-from CAL.memory import FullCompressionMemory
 from CAL.message import Message, MessageRole
 from CAL.tool import Tool
 
@@ -106,17 +105,6 @@ class FakeLLM(LLM):
         return Message(role=MessageRole.ASSISTANT, content=[TextBlock(text="[Summary]")])
 
 
-class TrackingMemory(FullCompressionMemory):
-    def __init__(self, summarizer_llm: Optional[LLM] = None, max_tokens: int = 50000, messages: Optional[List[Message]] = None):
-        llm = summarizer_llm or FakeLLM()
-        super().__init__(summarizer_llm=llm, max_tokens=max_tokens, messages=messages)
-        self.clone_called = False
-
-    def clone(self) -> "TrackingMemory":
-        self.clone_called = True
-        return TrackingMemory(summarizer_llm=self.summarizer_llm, max_tokens=self.max_tokens, messages=list(self._messages))
-
-
 def make_text_message(role: MessageRole, text: str) -> Message:
     return Message(role=role, content=[TextBlock(text=text)])
 
@@ -140,6 +128,3 @@ def fake_logger() -> FakeLogger:
     return FakeLogger()
 
 
-@pytest.fixture
-def tracking_memory() -> TrackingMemory:
-    return TrackingMemory()

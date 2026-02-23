@@ -8,7 +8,6 @@ from .llm import LLM, AnthropicVertexLLM, GeminiLLM
 from .tool import Tool, tool, StopTool
 from .subagent import SubAgentTool, subagent
 from .message import Message, MessageRole
-from .memory import Memory, FullCompressionMemory
 from .memory_engine import (
     ArchiveStore,
     ContextLedgerEntry,
@@ -66,8 +65,6 @@ __all__ = [
     'ImageSource',
     'ToolUseBlock',
     'ToolResultBlock',
-    'Memory',
-    'FullCompressionMemory',
     'MemoryEngine',
     'DefaultMemoryEngine',
     'MemoryObserver',
