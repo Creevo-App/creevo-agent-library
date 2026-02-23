@@ -16,7 +16,7 @@ Or for a specific version:
 pip install git+https://github.com/Creevo-App/creevo-agent-library.git@v0.1.0
 ```
 
-## Quick Start (v2)
+## Quick Start
 
 ```python
 from CAL import (
@@ -60,27 +60,6 @@ agent = Agent(
 
 # Run agent
 result = agent.run("Hello, how can you help me?")
-```
-
-## Legacy Mode (Compatibility)
-
-`FullCompressionMemory` is still available for backward compatibility:
-
-```python
-from CAL import Agent, FullCompressionMemory, GeminiLLM
-
-llm = GeminiLLM(model='gemini-3-pro-preview', api_key=None, max_tokens=4096)
-summarizer = GeminiLLM(model='gemini-3-flash-preview', api_key=None, max_tokens=2048)
-memory = FullCompressionMemory(summarizer_llm=summarizer, max_tokens=50000)
-
-agent = Agent(
-    llm=llm,
-    system_prompt="You are a helpful assistant.",
-    max_calls=100,
-    max_tokens=4096,
-    memory=memory,
-    agent_name="legacy-session",
-)
 ```
 
 ## Architecture
