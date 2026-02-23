@@ -324,17 +324,8 @@ class Agent:
                         end_time=llm_end_time,
                     )
 
-                turn_seq = await self._record_v2_turn(
-                    run_id,
-                    turn_seq,
-                    agent_message,
-                    metadata={
-                        "iteration": iteration,
-                        "context_tokens": context_packet.total_tokens,
-                        "token_usage_by_source": context_packet.token_usage_by_source,
-                    },
-                )
-
+                # Check for error conditions BEFORE persisting to avoid
+                # polluting the conversation store with malformed responses.
                 if hasattr(agent_message, "metadata") and agent_message.metadata:
                     finish_reason = agent_message.metadata.get("finish_reason")
                     if finish_reason and "MAX_TOKENS" in str(finish_reason):
@@ -352,8 +343,19 @@ class Agent:
                         workflow_status = "error_malformed_function_call"
                         break
 
-                # Successful LLM response — reset backoff streak
+                # Successful LLM response — reset backoff streak and persist
                 error_streak = 0
+
+                turn_seq = await self._record_v2_turn(
+                    run_id,
+                    turn_seq,
+                    agent_message,
+                    metadata={
+                        "iteration": iteration,
+                        "context_tokens": context_packet.total_tokens,
+                        "token_usage_by_source": context_packet.token_usage_by_source,
+                    },
+                )
 
 
                 tool_uses = self._parse_tool_uses(agent_message)
