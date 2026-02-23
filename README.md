@@ -112,7 +112,9 @@ Artifacts:
 
 ### Tools
 
-Use the `@tool` decorator to create tools:
+CAL provides three ways to give an agent tools:
+
+**`@tool` decorator** — wrap an async function as a tool:
 
 ```python
 from CAL import tool
@@ -125,6 +127,32 @@ async def my_tool(param1: str, param2: int):
         "metadata": {}
     }
 ```
+
+**`@subagent` decorator** — delegate to a specialized sub-agent (see `src/CAL/subagent.py`).
+
+**MCP servers** — connect to any [Model Context Protocol](https://modelcontextprotocol.io/) server
+and use its tools as regular CAL tools (install with `pip install "creevo-agent-library[mcp]"`):
+
+```python
+from CAL.mcp import connect_mcp_server, disconnect_mcp_tools
+
+# Returns a list of MCPTool instances — same interface as @tool and @subagent
+mcp_tools = await connect_mcp_server(command="npx", args=["-y", "@upstash/context7-mcp"])
+
+agent = Agent(
+    llm=GeminiLLM(model="gemini-3-flash-preview", api_key="...", max_tokens=4096),
+    system_prompt="You are a helpful assistant.",
+    max_calls=10,
+    max_tokens=4096,
+    agent_name="mcp-agent",
+    tools=[StopTool(), *mcp_tools],  # mix with any other CAL tools
+)
+
+result = await agent.run_async("What does React useEffect do?")
+await disconnect_mcp_tools(mcp_tools)
+```
+
+See [`examples/mcp_context7_agent.ipynb`](examples/mcp_context7_agent.ipynb) for a full walkthrough.
 
 ## Migration
 

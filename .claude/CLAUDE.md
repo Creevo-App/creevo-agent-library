@@ -3,7 +3,7 @@
 ## Architecture Overview
 
 - CAL is a Python library for building agentic AI applications
-- Main components: `Agent`, `LLM` (GeminiLLM), `DefaultMemoryEngine`, `Tool`, `Message`, `SubAgentTool`
+- Main components: `Agent`, `LLM` (GeminiLLM), `DefaultMemoryEngine`, `Tool`, `Message`, `SubAgentTool`, `MCPTool`
 - Package: `creevo-agent-library` (installed from GitHub: https://github.com/Creevo-App/creevo-agent-library)
 
 ## Memory Management
@@ -54,7 +54,8 @@ async def code_reviewer(task: str):
 ### Module Structure
 
 - `src/CAL/subagent.py` contains `SubAgentTool` and `@subagent` decorator
-- Kept separate from `src/CAL/tool.py` to avoid circular imports with `src/CAL/agent.py`
+- `src/CAL/mcp.py` contains `MCPTool`, `MCPServerConnection`, `connect_mcp_server()`, `disconnect_mcp_tools()`
+- Both kept separate from `src/CAL/tool.py` to avoid circular imports with `src/CAL/agent.py`
 
 ## Circular Import Pattern
 
@@ -91,9 +92,49 @@ for tool in self.tools:
 
 - Use `@tool` decorator for regular tool functions
 - Use `@subagent` decorator for delegating to specialized sub-agents
+- Use `connect_mcp_server()` to connect to external MCP servers and get tools
 - Tools are async functions returning dict with `content` and `metadata` keys
 - Content should be a list of content blocks: `[{"type": "text", "text": "..."}]`
 - `ToolResultBlock.content` accepts either a string or `List[ContentBlock]`
+
+## MCP (Model Context Protocol) Support
+
+MCP enables CAL agents to connect to external MCP servers and use their tools. The `mcp` package is an optional dependency.
+
+### Architecture
+
+- `src/CAL/mcp.py` contains `MCPServerConnection`, `MCPTool`, `connect_mcp_server()`, `disconnect_mcp_tools()`
+- `MCPTool` follows the same pattern as `SubAgentTool`: bypasses `Tool.__init__()`, implements `get_schema()` / `gemini_input_form()` / `execute()` directly
+- No changes to `Agent`, `LLM`, or the core agentic loop were needed — `MCPTool` is just another `Tool`
+- MCP exports are optional in `__init__.py` via `try/except ImportError`
+
+### Usage
+
+```python
+from CAL.mcp import connect_mcp_server, disconnect_mcp_tools
+
+# Connect to an MCP server — returns List[MCPTool]
+mcp_tools = await connect_mcp_server(command="npx", args=["-y", "@upstash/context7-mcp"])
+
+# Pass MCP tools to an Agent like any other tool
+agent = Agent(
+    llm=llm, system_prompt="...", max_calls=10, max_tokens=4096,
+    agent_name="mcp-agent",
+    tools=[StopTool(), *mcp_tools],
+)
+result = await agent.run_async("What does React useEffect do?")
+
+# Clean up server connections when done
+await disconnect_mcp_tools(mcp_tools)
+```
+
+### Key Details
+
+- `MCPServerConnection` manages the MCP server subprocess lifecycle via `AsyncExitStack`
+- All `MCPTool` instances from one `connect_mcp_server()` call share the same connection
+- `disconnect_mcp_tools()` deduplicates connections and is safe to call with mixed tool lists
+- Content mapping: MCP text → `TextBlock`, MCP image → `ImageBlock`, MCP resource → `TextBlock`
+- Errors from the MCP server are returned as `ToolResultBlock(is_error=True)`
 
 ## Debugging LLM Issues
 

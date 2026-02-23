@@ -230,8 +230,10 @@ class Agent:
         run_id = uuid.uuid4().hex
         max_retries = 10
         retries = 0
+        error_streak = 0  # consecutive API errors, used for backoff delay calculation
 
-        emit_progress(self.agent_name, "start", "Got your request, analyzing your game idea...")
+        emit_progress(self.agent_name, "start", "Got your request, analyzing...")
+
 
         if self.logger:
             self.logger.start_trace("agent.run", user_prompt)
@@ -289,8 +291,11 @@ class Agent:
                     )
                 except Exception as exc:
                     retries += 1
+                    error_streak += 1
                     if retries < max_retries:
-                        print(f"LLM error: {exc}, retry {retries}/{max_retries}", file=sys.stderr)
+                        delay = min(2 ** (error_streak - 1), 60)
+                        print(f"LLM error: {exc}, retry {retries}/{max_retries} after {delay}s", file=sys.stderr)
+                        await asyncio.sleep(delay)
                         continue
                     raise RuntimeError(f"LLM call failed after {max_retries} retries: {exc}") from exc
 
@@ -338,11 +343,18 @@ class Agent:
                         break
                     if finish_reason and "MALFORMED_FUNCTION_CALL" in str(finish_reason):
                         retries += 1
+                        error_streak += 1
                         if retries < max_retries:
-                            print(f"MALFORMED_FUNCTION_CALL detected, retry {retries}/{max_retries}", file=sys.stderr)
+                            delay = min(2 ** (error_streak - 1), 60)
+                            print(f"MALFORMED_FUNCTION_CALL detected, retry {retries}/{max_retries} after {delay}s", file=sys.stderr)
+                            await asyncio.sleep(delay)
                             continue
                         workflow_status = "error_malformed_function_call"
                         break
+
+                # Successful LLM response — reset backoff streak
+                error_streak = 0
+
 
                 tool_uses = self._parse_tool_uses(agent_message)
                 if not tool_uses:
@@ -388,11 +400,11 @@ class Agent:
             raise
         finally:
             status_msg = {
-                "completed_success": "Game ready soon – finalizing details...",
-                "completed_no_tools": "Finished reasoning about your game.",
+                "completed_success": "Almost done – finalizing...",
+                "completed_no_tools": "Finished reasoning.",
                 "completed_max_tokens": "Reached internal limit, finishing up...",
                 "completed_max_iterations": "Finished maximum number of planning steps.",
-                "completed_stop": "Completed building your game!",
+                "completed_stop": "Task completed.",
                 "error_malformed_function_call": "Encountered an error, finishing up...",
             }.get(workflow_status, "Wrapping up...")
 

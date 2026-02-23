@@ -49,6 +49,7 @@ Run the CAL test suite using pytest.
 
 - `tests/test_agent.py` - Agent class tests
 - `tests/test_subagent.py` - SubAgent and delegation tests
+- `tests/test_mcp.py` - MCP tool and connection tests
 - `tests/test_memory.py` - Memory and compression tests
 - `tests/test_tool.py` - Tool decorator and execution tests
 - `tests/test_integration.py` - Integration tests (require API keys)
