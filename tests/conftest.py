@@ -95,8 +95,14 @@ class FakeLLM(LLM):
     """Minimal LLM for testing that returns a simple summary."""
     def __init__(self):
         super().__init__(max_tokens=128, name="fake-llm", provider="test")
+        self.calls = []
 
     def generate_content(self, system_prompt: str, conversation_history: List[Message], tools: Optional[List[Tool]] = None) -> Message:
+        self.calls.append({
+            "system_prompt": system_prompt,
+            "history": list(conversation_history),
+            "tools": list(tools or []),
+        })
         return Message(role=MessageRole.ASSISTANT, content=[TextBlock(text="[Summary]")])
 
 

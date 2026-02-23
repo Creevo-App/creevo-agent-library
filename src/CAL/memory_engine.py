@@ -23,6 +23,7 @@ from opentelemetry import trace
 
 from .content_blocks import ContentBlock, TextBlock, ToolResultBlock, ToolUseBlock
 from .message import Message, MessageRole
+from .llm import LLM
 
 
 class MemoryScope(str, Enum):
@@ -818,6 +819,8 @@ class DefaultMemoryEngine:
         post_recall_processors: Optional[List[PostRecallProcessor]] = None,
         archive_cold_threshold: int = 60,
         archive_keep_recent: int = 24,
+        summarizer_llm: Optional[LLM] = None,
+        archiver: Optional[Any] = None,
     ):
         self.conversation_store = conversation_store or InMemoryConversationStore()
         self.working_store = working_store or InMemoryWorkingMemoryStore()
@@ -835,6 +838,8 @@ class DefaultMemoryEngine:
         self.archive_cold_threshold = max(4, archive_cold_threshold)
         self.archive_keep_recent = max(2, archive_keep_recent)
 
+        self.summarizer_llm = summarizer_llm
+        self.archiver = archiver
         self._archived_turn_ids: set[str] = set()
         self._lock = threading.Lock()
         self._health = MemoryHealthSnapshot(
@@ -1376,7 +1381,13 @@ class DefaultMemoryEngine:
             return
 
         tokens_before = sum(_estimate_message_tokens(turn.message) for turn in candidate_turns)
-        summary_text = self._summarize_turns(candidate_turns)
+        if self.summarizer_llm is not None:
+            try:
+                summary_text = self._summarize_turns_with_llm(candidate_turns)
+            except Exception:
+                summary_text = self._summarize_turns(candidate_turns)
+        else:
+            summary_text = self._summarize_turns(candidate_turns)
         summary_message_tokens = _estimate_tokens(summary_text)
 
         archive_id = f"archive-{uuid.uuid4().hex[:12]}"
@@ -1391,6 +1402,28 @@ class DefaultMemoryEngine:
             created_at=time.time(),
         )
         await self.archive_store.store_summary(summary)
+
+        if self.archiver is not None:
+            try:
+                archive_content = "\n\n".join(
+                    f"{t.message.role.value}: {_message_to_text(t.message)}" for t in candidate_turns
+                )
+                tools_used = []
+                for t in candidate_turns:
+                    text = _message_to_text(t.message)
+                    if "[ToolUse " in text:
+                        names = re.findall(r"\[ToolUse (\S+)\]", text)
+                        tools_used.extend(names)
+                self.archiver.write_context_file(
+                    filename=archive_id,
+                    content=archive_content,
+                    message_range=f"{len(candidate_turns)} turns",
+                    tools_used=list(set(tools_used)),
+                    key_files=[],
+                    summary=summary_text,
+                )
+            except Exception:
+                pass
 
         for turn in candidate_turns:
             self._archived_turn_ids.add(turn.turn_id)
@@ -1454,6 +1487,38 @@ class DefaultMemoryEngine:
                 compact = compact[:177] + "..."
             lines.append(f"- {role}: {compact}")
         return "\n".join(lines)
+
+    def _summarize_turns_with_llm(self, turns: List[TurnRecord]) -> str:
+        """Summarize turns using LLM-based compression."""
+        summarization_prompt = (
+            "You are a conversation summarizer. Analyze the conversation history "
+            "and produce a comprehensive summary covering key actions, decisions, "
+            "tool usage, and outcomes. Include important context that would be "
+            "needed to continue the conversation. Return plain text, not JSON."
+        )
+        text_parts = []
+        for turn in turns:
+            role = turn.message.role.value
+            content = _message_to_text(turn.message)
+            text_parts.append(f"{role}: {content}")
+
+        text_history = "\n\n".join(text_parts)
+        summary_request = Message(
+            role=MessageRole.USER,
+            content=f"Summarize the following conversation:\n\n{text_history}",
+        )
+        response = self.summarizer_llm.generate_content(
+            system_prompt=summarization_prompt,
+            conversation_history=[summary_request],
+            tools=None,
+        )
+        if isinstance(response.content, str):
+            return response.content
+        parts = []
+        for block in response.content:
+            if hasattr(block, "text"):
+                parts.append(block.text)
+        return "\n".join(parts)
 
     def _inc_health(
         self,
