@@ -79,12 +79,8 @@ class SubAgentTool(Tool):
         sub_agent_name = f"{self._parent_agent.agent_name}_sub_{self.name}"
 
         # Apply sub-agent max_tokens preference when provided.
-        # For v2 agents this maps to ContextPolicy.total_token_budget; for legacy
-        # agents it maps to the cloned memory compression threshold.
         if self.sub_max_tokens is not None:
             effective_max_tokens = self.sub_max_tokens
-        elif self._parent_agent.memory is not None and hasattr(self._parent_agent.memory, 'max_tokens'):
-            effective_max_tokens = self._parent_agent.memory.max_tokens
         else:
             effective_max_tokens = self._parent_agent.max_tokens
 
@@ -98,50 +94,24 @@ class SubAgentTool(Tool):
             )
 
         # Create sub-agent with its own LLM configuration.
-        if self._parent_agent.memory_engine is not None:
-            parent_policy = self._parent_agent.context_policy or ContextPolicy()
-            sub_policy = ContextPolicy(**parent_policy.__dict__)
-            if self.sub_max_tokens is not None:
-                sub_policy.total_token_budget = max(1024, int(self.sub_max_tokens))
+        parent_policy = self._parent_agent.context_policy or ContextPolicy()
+        sub_policy = ContextPolicy(**parent_policy.__dict__)
+        if self.sub_max_tokens is not None:
+            sub_policy.total_token_budget = max(1024, int(self.sub_max_tokens))
 
-            sub_agent = Agent(
-                llm=self.sub_llm,
-                system_prompt=self.system_prompt,
-                max_calls=self.sub_max_calls,
-                max_tokens=effective_max_tokens,
-                memory=None,
-                memory_engine=self._parent_agent.memory_engine,
-                context_policy=sub_policy,
-                agent_name=sub_agent_name,
-                thread_id=sub_agent_name,
-                resource_id=self._parent_agent.resource_id,
-                tools=list(self.sub_tools),
-                logger=child_logger,
-            )
-        else:
-            # Legacy path: clone parent memory to preserve historical behavior.
-            sub_memory = self._parent_agent.memory.clone()
-            if hasattr(sub_memory, 'max_tokens'):
-                sub_memory.max_tokens = effective_max_tokens
-            if hasattr(sub_memory, 'agent_name'):
-                sub_memory.agent_name = sub_agent_name
-            if hasattr(sub_memory, 'archiver'):
-                from .compression import CompressionArchiver
-                sub_memory.archiver = CompressionArchiver(agent_name=sub_agent_name)
-            if hasattr(sub_memory, 'logger') and child_logger is not None:
-                sub_memory.logger = child_logger
-
-            sub_agent = Agent(
-                llm=self.sub_llm,
-                system_prompt=self.system_prompt,
-                max_calls=self.sub_max_calls,
-                max_tokens=effective_max_tokens,
-                memory=sub_memory,
-                memory_engine=None,
-                agent_name=sub_agent_name,
-                tools=list(self.sub_tools),
-                logger=child_logger,
-            )
+        sub_agent = Agent(
+            llm=self.sub_llm,
+            system_prompt=self.system_prompt,
+            max_calls=self.sub_max_calls,
+            max_tokens=effective_max_tokens,
+            memory_engine=self._parent_agent.memory_engine,
+            context_policy=sub_policy,
+            agent_name=sub_agent_name,
+            thread_id=sub_agent_name,
+            resource_id=self._parent_agent.resource_id,
+            tools=list(self.sub_tools),
+            logger=child_logger,
+        )
 
         # Run the sub-agent
         try:

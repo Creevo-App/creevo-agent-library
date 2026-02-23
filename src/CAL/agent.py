@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional
 from .content_blocks import TextBlock, ToolResultBlock, ToolUseBlock
 from .llm import LLM
 from .logger import Logger
-from .memory import Memory
 from .memory_engine import (
     CompositeMemoryObserver,
     ContextPolicy,
@@ -45,7 +44,7 @@ def emit_progress(agent_name: str, event: str, message: str, detail: dict = None
 
 
 class Agent:
-    """Agent class with legacy and v2 memory-engine execution paths."""
+    """Agent class using DefaultMemoryEngine for conversation management."""
 
     def __init__(
         self,
@@ -53,7 +52,6 @@ class Agent:
         system_prompt: str,
         max_calls: int,
         max_tokens: int,
-        memory: Optional[Memory] = None,
         agent_name: str = "session",
         tools: Optional[List[Tool]] = None,
         logger: Optional[Logger] = None,
@@ -68,7 +66,6 @@ class Agent:
         self.system_prompt = system_prompt
         self.max_calls = max_calls
         self.max_tokens = max_tokens
-        self.memory = memory
         self.agent_name = agent_name
         self.logger = logger
         self._context_queue = queue.Queue()
@@ -78,8 +75,7 @@ class Agent:
         self.resource_id = resource_id or agent_name
 
         self.memory_engine = memory_engine
-        if self.memory_engine is None and self.memory is None:
-            # v2-first default if caller omits both
+        if self.memory_engine is None:
             self.memory_engine = DefaultMemoryEngine(context_policy=self.context_policy)
 
         if isinstance(self.memory_engine, DefaultMemoryEngine):
@@ -110,7 +106,7 @@ class Agent:
                     "agent_name": self.agent_name,
                     "thread_id": self.thread_id,
                     "resource_id": self.resource_id,
-                    "memory_mode": "v2" if self.memory_engine is not None else "legacy",
+                    "memory_mode": "v2",
                 }
             )
 
@@ -121,9 +117,7 @@ class Agent:
     @property
     def conversation_history(self) -> List[Message]:
         """Expose current conversation history."""
-        if self.memory_engine is not None and self.memory is None:
-            return list(self._latest_thread_messages)
-        return self.memory.get_history()
+        return list(self._latest_thread_messages)
 
     def _history_json(self) -> str:
         """Return serialized conversation history."""
@@ -210,19 +204,6 @@ class Agent:
                 break
         return pushed
 
-    def _cleanup_incomplete_conversation(self):
-        """Legacy cleanup for incomplete assistant tool-call messages."""
-        if self.memory is None:
-            return
-
-        history = self.memory.get_history()
-        if not history:
-            return
-
-        last_message = history[-1]
-        if self._has_tool_calls(last_message):
-            self.memory._messages.pop()
-
     async def _record_v2_turn(
         self,
         run_id: str,
@@ -243,8 +224,8 @@ class Agent:
         self._latest_thread_messages = await self.memory_engine.get_thread_turns(self.thread_id)
         return seq + 1
 
-    async def _run_async_v2(self, user_prompt: str) -> Message:
-        """Run the v2 memory-engine based loop."""
+    async def run_async(self, user_prompt: str) -> Message:
+        """Run the agent asynchronously using the memory engine."""
         assert self.max_calls > 0, "max_calls must be positive"
         run_id = uuid.uuid4().hex
         max_retries = 10
@@ -454,210 +435,6 @@ class Agent:
         if last_agent_message is None:
             return Message(role=MessageRole.ASSISTANT, content=[TextBlock(text="")])
         return last_agent_message
-
-    async def _run_async_legacy(self, user_prompt: str) -> Message:
-        """Legacy execution path based on FullCompressionMemory behavior."""
-        assert self.max_calls > 0, "max_calls must be positive"
-
-        self._cleanup_incomplete_conversation()
-
-        max_retries = 10
-        retries = 0
-
-        emit_progress(self.agent_name, "start", "Got your request, analyzing your game idea...")
-
-        if self.logger:
-            self.logger.start_trace("agent.run", user_prompt)
-
-        user_message = Message(role=MessageRole.USER, content=[TextBlock(text=user_prompt)])
-        self.memory.add_message(user_message)
-
-        iteration = 0
-        last_agent_message = None
-        workflow_status = "completed_success"
-
-        try:
-            while iteration < self.max_calls:
-                pushed_blocks = []
-                while True:
-                    try:
-                        pushed_blocks.append(TextBlock(text=self._context_queue.get_nowait()))
-                    except queue.Empty:
-                        break
-                if pushed_blocks:
-                    history = self.memory.get_history()
-                    if history and history[-1].role == MessageRole.USER:
-                        last_msg = self.memory._messages[-1]
-                        if isinstance(last_msg.content, list):
-                            last_msg.content.extend(pushed_blocks)
-                        else:
-                            last_msg.content = [TextBlock(text=last_msg.content)] + pushed_blocks
-                    else:
-                        self.memory.add_message(Message(role=MessageRole.USER, content=pushed_blocks))
-
-                emit_progress(
-                    self.agent_name,
-                    "llm_start",
-                    f"Step {iteration + 1}: Thinking...",
-                    {"iteration": iteration},
-                )
-                llm_start_time = time.time_ns()
-
-                try:
-                    agent_message = self.llm.generate_content(self.system_prompt, self.memory.get_history(), self.tools)
-                except Exception as exc:
-                    retries += 1
-                    if retries < max_retries:
-                        print(f"LLM error: {exc}, retry {retries}/{max_retries}", file=sys.stderr)
-                        continue
-                    raise RuntimeError(f"LLM call failed after {max_retries} retries: {exc}") from exc
-
-                llm_end_time = time.time_ns()
-                last_agent_message = agent_message
-
-                emit_progress(
-                    self.agent_name,
-                    "llm_end",
-                    f"Step {iteration + 1}: Planning complete.",
-                    {"iteration": iteration},
-                )
-
-                if self.logger:
-                    self.logger.log_llm_response(
-                        agent_message,
-                        iteration,
-                        model=self.llm.name,
-                        provider=self.llm.provider,
-                        start_time=llm_start_time,
-                        end_time=llm_end_time,
-                    )
-
-                if agent_message.usage and "prompt_tokens" in agent_message.usage:
-                    self.memory.sync_token_count_from_llm_usage(agent_message.usage["prompt_tokens"])
-
-                if hasattr(agent_message, "metadata") and agent_message.metadata:
-                    finish_reason = agent_message.metadata.get("finish_reason")
-                    if finish_reason and "MAX_TOKENS" in finish_reason:
-                        self.memory.add_message(agent_message)
-                        workflow_status = "completed_max_tokens"
-                        print("Hit MAX_TOKENS, stopping agent loop", file=sys.stderr)
-                        break
-
-                    if finish_reason and "MALFORMED_FUNCTION_CALL" in finish_reason:
-                        retries += 1
-                        if retries < max_retries:
-                            print(f"MALFORMED_FUNCTION_CALL detected, retry {retries}/{max_retries}", file=sys.stderr)
-                            continue
-                        self.memory.add_message(agent_message)
-                        print("MALFORMED_FUNCTION_CALL: max retries reached, stopping", file=sys.stderr)
-                        workflow_status = "error_malformed_function_call"
-                        break
-
-                self.memory.add_message(agent_message)
-                tool_uses = self._parse_tool_uses(agent_message)
-
-                if not tool_uses:
-                    retries += 1
-                    if retries < max_retries:
-                        print(f"No tool calls returned, prompting to continue ({retries}/{max_retries})", file=sys.stderr)
-                        prompt_message = Message(
-                            role=MessageRole.USER,
-                            content=[
-                                TextBlock(
-                                    text=(
-                                        "Continue with your task. You must use tool calls to make progress. "
-                                        "When you are done, use the stop tool."
-                                    )
-                                )
-                            ],
-                        )
-                        self.memory.add_message(prompt_message)
-                        iteration += 1
-                        continue
-                    print("No tool calls after max prompts, stopping", file=sys.stderr)
-                    workflow_status = "completed_no_tools"
-                    break
-
-                retries = 0
-
-                emit_progress(
-                    self.agent_name,
-                    "tool_start",
-                    f"Step {iteration + 1}: Running tools...",
-                    {"iteration": iteration, "tools": [tu.name for tu in tool_uses]},
-                )
-
-                tool_results = await self._execute_tools(tool_uses)
-
-                emit_progress(
-                    self.agent_name,
-                    "tool_end",
-                    f"Step {iteration + 1}: Tools complete.",
-                    {"iteration": iteration, "tools": [tu.name for tu in tool_uses]},
-                )
-
-                stop_called = any(tu.name == "stop" for tu in tool_uses)
-
-                tool_message = Message(role=MessageRole.USER, content=tool_results)
-                self.memory.add_message(tool_message)
-
-                if stop_called:
-                    workflow_status = "completed_stop"
-                    break
-
-                iteration += 1
-
-            if iteration >= self.max_calls:
-                workflow_status = "completed_max_iterations"
-
-        except Exception as exc:
-            workflow_status = f"error: {str(exc)}"
-            raise
-        finally:
-            status_msg = {
-                "completed_success": "Game ready soon – finalizing details...",
-                "completed_no_tools": "Finished reasoning about your game.",
-                "completed_max_tokens": "Reached internal limit, finishing up...",
-                "completed_max_iterations": "Finished maximum number of planning steps.",
-                "completed_stop": "Completed building your game!",
-                "error_malformed_function_call": "Encountered an error, finishing up...",
-            }.get(workflow_status, "Wrapping up...")
-
-            emit_progress(self.agent_name, "complete", status_msg, {"workflow_status": workflow_status})
-
-            if self.logger:
-                final_output = self._extract_final_output()
-                if not final_output and last_agent_message:
-                    content = last_agent_message.content
-                    if isinstance(content, list):
-                        parts = []
-                        for x in content:
-                            if hasattr(x, "text"):
-                                parts.append(x.text)
-                            else:
-                                parts.append(str(x))
-                        final_output = " ".join(parts)
-                    else:
-                        final_output = str(content)
-
-                self.logger.end_trace(
-                    output=str(final_output),
-                    metadata={"status": workflow_status, "total_iterations": iteration, "memory_mode": "legacy"},
-                )
-
-            while not self._context_queue.empty():
-                self._context_queue.get_nowait()
-
-        return last_agent_message
-
-    async def run_async(self, user_prompt: str) -> Message:
-        """Run agent asynchronously using v2 memory engine when configured."""
-        if self.memory_engine is not None and self.memory is None:
-            return await self._run_async_v2(user_prompt)
-        if self.memory_engine is not None and self.memory is not None:
-            # If both are set, prefer v2 engine explicitly.
-            return await self._run_async_v2(user_prompt)
-        return await self._run_async_legacy(user_prompt)
 
     def run(self, user_prompt: str) -> Message:
         """Sync wrapper for run_async."""

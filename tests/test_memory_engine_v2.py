@@ -295,7 +295,6 @@ async def test_v2_agent_and_subagent_isolate_threads_and_emit_ledgers():
         system_prompt="parent system",
         max_calls=4,
         max_tokens=256,
-        memory=None,
         memory_engine=engine,
         context_policy=ContextPolicy(total_token_budget=400),
         agent_name="parent",
