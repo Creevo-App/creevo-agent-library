@@ -19,7 +19,6 @@ from .memory_engine import (
     DefaultMemoryEngine,
     LoggerMemoryObserver,
     MemoryEngine,
-    NullMemoryObserver,
     OTelMemoryObserver,
     TurnRecord,
     estimate_system_tokens,
@@ -77,18 +76,14 @@ class Agent:
         self.memory_engine = memory_engine
         if self.memory_engine is None:
             self.memory_engine = DefaultMemoryEngine(context_policy=self.context_policy)
-
-        # Only install default observers if none have been configured yet.
-        # This prevents duplicate observer stacking when subagents share
-        # the parent's memory_engine and create new Agent instances.
-        if isinstance(self.memory_engine, DefaultMemoryEngine):
-            current_observer = self.memory_engine.observer
-            if isinstance(current_observer, NullMemoryObserver):
-                observer_chain = []
-                if self.logger is not None:
-                    observer_chain.append(LoggerMemoryObserver(self.logger))
-                observer_chain.append(OTelMemoryObserver())
-                self.memory_engine.observer = CompositeMemoryObserver(observer_chain)
+            # Install default observers only on engines we created ourselves.
+            # When a memory_engine is passed in (e.g. shared from a parent agent),
+            # we must not mutate its observers — the owner is responsible for setup.
+            observer_chain = []
+            if self.logger is not None:
+                observer_chain.append(LoggerMemoryObserver(self.logger))
+            observer_chain.append(OTelMemoryObserver())
+            self.memory_engine.observer = CompositeMemoryObserver(observer_chain)
 
         self._latest_thread_messages: List[Message] = []
 
