@@ -720,6 +720,25 @@ class PostRecallProcessor(Protocol):
         pass
 
 
+@runtime_checkable
+class ContextArchiver(Protocol):
+    """Protocol for file-based archival of compressed conversation context."""
+
+    def write_context_file(
+        self,
+        filename: str,
+        content: str,
+        message_range: str,
+        tools_used: List[str],
+        key_files: List[str],
+        summary: str,
+    ) -> Any:
+        ...
+
+    def has_archived_context(self) -> bool:
+        ...
+
+
 class RedactionProcessor:
     """Simple pre-write redaction for common secret patterns."""
 
@@ -820,7 +839,7 @@ class DefaultMemoryEngine:
         archive_cold_threshold: int = 60,
         archive_keep_recent: int = 24,
         summarizer_llm: Optional[LLM] = None,
-        archiver: Optional[Any] = None,
+        archiver: Optional["ContextArchiver"] = None,
     ):
         self.conversation_store = conversation_store or InMemoryConversationStore()
         self.working_store = working_store or InMemoryWorkingMemoryStore()
@@ -1384,7 +1403,8 @@ class DefaultMemoryEngine:
         if self.summarizer_llm is not None:
             try:
                 summary_text = self._summarize_turns_with_llm(candidate_turns)
-            except Exception:
+            except Exception as exc:
+                self._inc_health(last_error=f"summarizer_llm: {exc}")
                 summary_text = self._summarize_turns(candidate_turns)
         else:
             summary_text = self._summarize_turns(candidate_turns)
@@ -1422,8 +1442,8 @@ class DefaultMemoryEngine:
                     key_files=[],
                     summary=summary_text,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                self._inc_health(last_error=f"archiver: {exc}")
 
         for turn in candidate_turns:
             self._archived_turn_ids.add(turn.turn_id)
@@ -1505,8 +1525,9 @@ class DefaultMemoryEngine:
         text_history = "\n\n".join(text_parts)
         summary_request = Message(
             role=MessageRole.USER,
-            content=f"Summarize the following conversation:\n\n{text_history}",
+            content=[TextBlock(text=f"Summarize the following conversation:\n\n{text_history}")],
         )
+        # NOTE: generate_content is synchronous; consider asyncio.to_thread for production use
         response = self.summarizer_llm.generate_content(
             system_prompt=summarization_prompt,
             conversation_history=[summary_request],

@@ -2,13 +2,22 @@ import pytest
 
 from CAL.content_blocks import TextBlock
 from CAL.memory_engine import (
-    ContextPolicy,
     DefaultMemoryEngine,
     InMemoryMemoryObserver,
     TurnRecord,
 )
+from CAL.llm import LLM
 from CAL.message import Message, MessageRole
 from conftest import FakeLLM
+
+
+class FailingLLM(LLM):
+    """LLM that always raises to test fallback behavior."""
+    def __init__(self):
+        super().__init__(max_tokens=128, name="failing-llm", provider="test")
+
+    def generate_content(self, system_prompt, conversation_history, tools=None):
+        raise RuntimeError("LLM unavailable")
 
 
 @pytest.mark.asyncio
@@ -97,3 +106,32 @@ async def test_archiver_writes_to_disk_when_provided():
             )
 
         assert archiver.has_archived_context(), "Archiver should have written context files"
+
+
+@pytest.mark.asyncio
+async def test_llm_summarizer_fallback_on_failure():
+    """When summarizer_llm raises, falls back to naive summarizer without crashing."""
+    engine = DefaultMemoryEngine(
+        summarizer_llm=FailingLLM(),
+        archive_cold_threshold=8,
+        archive_keep_recent=4,
+    )
+
+    for i in range(12):
+        role = MessageRole.USER if i % 2 == 0 else MessageRole.ASSISTANT
+        await engine.record_turn(
+            TurnRecord(
+                run_id="r1",
+                turn_id=f"t-{i}",
+                thread_id="thread-1",
+                resource_id="resource-1",
+                message=Message(role=role, content=[TextBlock(text=f"Turn {i} content with enough words to matter")]),
+            )
+        )
+
+    summaries = await engine.archive_store.list_summaries("thread-1", "resource-1", limit=10)
+    assert summaries
+    assert "Archived context summary:" in summaries[0].summary
+    health = engine.health_snapshot()
+    assert health.last_error is not None
+    assert "summarizer_llm" in health.last_error
