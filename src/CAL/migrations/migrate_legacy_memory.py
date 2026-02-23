@@ -1,4 +1,8 @@
-"""One-time migration helpers from legacy FullCompressionMemory payloads to v2 MemoryEngine."""
+"""One-time migration helpers from legacy FullCompressionMemory payloads to v2 MemoryEngine.
+
+TODO: Remove this module (and its exports in __init__.py) once all legacy memory
+payloads have been migrated to the v2 DefaultMemoryEngine.
+"""
 
 from __future__ import annotations
 
