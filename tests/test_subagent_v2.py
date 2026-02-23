@@ -109,8 +109,15 @@ async def test_subagent_uses_separate_thread_id():
     await agent.run_async("start")
 
     parent_turns = await engine.get_thread_turns("thread-parent")
-    sub_turns = await engine.get_thread_turns("parent_sub_delegate")
     assert parent_turns
+
+    # thread_id is unique per invocation; find it by prefix
+    sub_thread_ids = [
+        tid for tid in engine.conversation_store._turns
+        if tid.startswith("parent_sub_delegate:")
+    ]
+    assert len(sub_thread_ids) == 1
+    sub_turns = await engine.get_thread_turns(sub_thread_ids[0])
     assert sub_turns
 
 

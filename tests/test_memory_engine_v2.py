@@ -307,9 +307,15 @@ async def test_v2_agent_and_subagent_isolate_threads_and_emit_ledgers():
     assert isinstance(result, Message)
 
     parent_turns = await engine.get_thread_turns("thread-parent")
-    sub_turns = await engine.get_thread_turns("parent_sub_delegate")
-
     assert parent_turns
+
+    # thread_id is unique per invocation; find it by prefix
+    sub_thread_ids = [
+        tid for tid in engine.conversation_store._turns
+        if tid.startswith("parent_sub_delegate:")
+    ]
+    assert len(sub_thread_ids) == 1
+    sub_turns = await engine.get_thread_turns(sub_thread_ids[0])
     assert sub_turns
     assert len(observer.context_ledgers) >= 2
 

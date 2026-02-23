@@ -1,6 +1,7 @@
 """SubAgent classes for CAL - enables multi-agent delegation."""
 
 import inspect
+import uuid
 from typing import Callable, List
 
 from google.genai import types
@@ -99,6 +100,10 @@ class SubAgentTool(Tool):
         if self.sub_max_tokens is not None:
             sub_policy.total_token_budget = max(1024, int(self.sub_max_tokens))
 
+        # Each invocation gets a unique thread_id so that conversation history
+        # from previous invocations of the same subagent tool doesn't leak in.
+        invocation_thread_id = f"{sub_agent_name}:{uuid.uuid4().hex[:12]}"
+
         sub_agent = Agent(
             llm=self.sub_llm,
             system_prompt=self.system_prompt,
@@ -107,7 +112,7 @@ class SubAgentTool(Tool):
             memory_engine=self._parent_agent.memory_engine,
             context_policy=sub_policy,
             agent_name=sub_agent_name,
-            thread_id=sub_agent_name,
+            thread_id=invocation_thread_id,
             resource_id=self._parent_agent.resource_id,
             tools=list(self.sub_tools),
             logger=child_logger,
