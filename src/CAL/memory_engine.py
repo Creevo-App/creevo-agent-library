@@ -228,7 +228,7 @@ class ContextRequest:
     thread_id: str
     resource_id: str
     query: str
-    policy: ContextPolicy
+    policy: Optional[ContextPolicy] = None
     system_prompt_tokens: int = 0
     tool_schema_tokens: int = 0
 

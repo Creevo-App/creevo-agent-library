@@ -229,7 +229,6 @@ class Agent:
 
         emit_progress(self.agent_name, "start", "Got your request, analyzing...")
 
-
         if self.logger:
             self.logger.start_trace("agent.run", user_prompt)
 
@@ -362,7 +361,6 @@ class Agent:
                         "token_usage_by_source": context_packet.token_usage_by_source,
                     },
                 )
-
 
                 tool_uses = self._parse_tool_uses(agent_message)
                 if not tool_uses:
