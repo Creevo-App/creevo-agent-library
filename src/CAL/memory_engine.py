@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from enum import Enum
@@ -440,6 +441,11 @@ class ClickHouseMemoryObserver:
     """Best-effort sink for context ledgers and memory events to ClickHouse HTTP API."""
 
     def __init__(self, endpoint: str, timeout_seconds: float = 1.0):
+        parsed = urllib.parse.urlparse(endpoint)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(
+                f"ClickHouseMemoryObserver endpoint must be an http(s) URL, got: {endpoint!r}"
+            )
         self.endpoint = endpoint.rstrip("/")
         self.timeout_seconds = timeout_seconds
 
