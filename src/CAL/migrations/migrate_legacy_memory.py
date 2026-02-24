@@ -86,6 +86,10 @@ async def migrate_legacy_memory_json(
     if not data:
         return 0
     payload = json.loads(data)
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"Expected a JSON object, got {type(payload).__name__}: {data[:120]!r}"
+        )
     return await migrate_legacy_memory_payload(
         payload=payload,
         memory_engine=memory_engine,
