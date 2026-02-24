@@ -156,6 +156,17 @@ async def test_subagent_shares_resource_id_with_parent():
     result = await agent.run_async("start")
     assert result is not None
 
+    # Find the sub-agent's thread and verify resource_id propagated
+    sub_thread_ids = [
+        tid for tid in engine.conversation_store._turns
+        if tid.startswith("parent_sub_delegate:")
+    ]
+    assert len(sub_thread_ids) == 1
+    sub_turns = await engine.conversation_store.all(sub_thread_ids[0])
+    assert sub_turns
+    for turn in sub_turns:
+        assert turn.resource_id == "shared-resource"
+
 
 @pytest.mark.asyncio
 async def test_subagent_explicit_max_tokens_overrides_parent():
