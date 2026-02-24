@@ -208,13 +208,14 @@ async def test_truncation_prefers_dropping_archive_before_semantic_and_recent():
     )
 
     assert packet.total_tokens <= policy.total_token_budget
-    if packet.truncated:
-        archive_records = [
-            r for r in packet.ledger.records
-            if r.source_type.value == "archive" and r.source_id == "archive-1"
-        ]
-        assert archive_records
-        assert archive_records[0].dropped_reason in {"overflow_total", "segment_budget"}
+    # The archive should always be dropped (by segment budget or total overflow)
+    # even when the remaining content fits the total budget.
+    archive_records = [
+        r for r in packet.ledger.records
+        if r.source_type.value == "archive" and r.source_id == "archive-1"
+    ]
+    assert archive_records
+    assert archive_records[0].dropped_reason in {"overflow_total", "segment_budget"}
 
 
 class FailingSemanticStore(InMemorySemanticMemoryStore):
