@@ -449,8 +449,11 @@ class Agent:
                     },
                 )
 
-            while not self._context_queue.empty():
-                self._context_queue.get_nowait()
+            while True:
+                try:
+                    self._context_queue.get_nowait()
+                except queue.Empty:
+                    break
 
         if last_agent_message is None:
             return Message(role=MessageRole.ASSISTANT, content=[TextBlock(text="")])
