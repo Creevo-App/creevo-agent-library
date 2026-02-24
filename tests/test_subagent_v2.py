@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch
 
 from CAL.agent import Agent
 from CAL.content_blocks import TextBlock, ToolUseBlock
@@ -188,9 +189,22 @@ async def test_subagent_explicit_max_tokens_overrides_parent():
         tools=[sub_tool],
     )
 
-    result = await agent.run_async("test")
+    # Capture the context_policy passed to the sub-agent's Agent.__init__
+    captured_policies = []
+    original_init = Agent.__init__
+
+    def _tracking_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        if self.agent_name.endswith("_sub_delegate"):
+            captured_policies.append(self.context_policy)
+
+    with patch.object(Agent, "__init__", _tracking_init):
+        result = await agent.run_async("test")
+
     assert result is not None
     assert len(sub_llm.calls) == 1
+    assert len(captured_policies) == 1
+    assert captured_policies[0].total_token_budget == explicit_sub_max_tokens
 
 
 @pytest.mark.asyncio
