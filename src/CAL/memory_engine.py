@@ -6,6 +6,7 @@ and first-class observability hooks.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
@@ -1408,7 +1409,7 @@ class DefaultMemoryEngine:
         tokens_before = sum(_estimate_message_tokens(turn.message) for turn in candidate_turns)
         if self.summarizer_llm is not None:
             try:
-                summary_text = self._summarize_turns_with_llm(candidate_turns)
+                summary_text = await asyncio.to_thread(self._summarize_turns_with_llm, candidate_turns)
             except Exception as exc:
                 self._inc_health(last_error=f"summarizer_llm: {exc}")
                 summary_text = self._summarize_turns(candidate_turns)
@@ -1533,7 +1534,6 @@ class DefaultMemoryEngine:
             role=MessageRole.USER,
             content=[TextBlock(text=f"Summarize the following conversation:\n\n{text_history}")],
         )
-        # NOTE: generate_content is synchronous; consider asyncio.to_thread for production use
         response = self.summarizer_llm.generate_content(
             system_prompt=summarization_prompt,
             conversation_history=[summary_request],
