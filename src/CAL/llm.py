@@ -276,7 +276,7 @@ class GeminiLLM(LLM):
                                 id=fc.id if hasattr(fc, 'id') else fc.name,
                                 name=fc.name,
                                 input=dict(fc.args),
-                                thought=getattr(part, 'thought', None),
+                                thought=getattr(part, 'thought', None) if isinstance(getattr(part, 'thought', None), str) else None,
                                 thought_signature=getattr(part, 'thought_signature', None)
                             )
                         )
