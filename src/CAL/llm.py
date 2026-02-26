@@ -5,7 +5,7 @@ LLM classes for CAL
 from abc import ABC, abstractmethod # This is a python import for abstract base class (abc)
 from typing import List, Optional
 from .message import Message, MessageRole
-from .content_blocks import TextBlock, ToolUseBlock
+from .content_blocks import TextBlock, ThinkingBlock, ToolUseBlock
 import os
 import sys
 from google import genai
@@ -168,7 +168,7 @@ class AnthropicVertexLLM(LLM):
 class GeminiLLM(LLM):
     """Gemini LLM implementation"""
     
-    def __init__(self, api_key: str, model: str, max_tokens: int, timeout_ms: int = 20_000):
+    def __init__(self, api_key: str, model: str, max_tokens: int, timeout_ms: int = 20_000, thinking_level: Optional[str] = None):
         """
         Initialize the Gemini Vertex LLM.
 
@@ -177,6 +177,8 @@ class GeminiLLM(LLM):
             model: Model name to use
             max_tokens: Maximum number of tokens for generation
             timeout_ms: HTTP timeout in milliseconds (default: 20000 = 20 seconds)
+            thinking_level: Optional thinking level for Gemini 3.x models.
+                Valid values: "minimal", "low", "medium", "high"
         """
         super().__init__(max_tokens, name=model, provider="Gemini")
         if not api_key:
@@ -185,6 +187,7 @@ class GeminiLLM(LLM):
             self.api_key = api_key
 
         self.model = model
+        self.thinking_level = thinking_level
         # Initialize client once to avoid duplicate API key warnings
         self.client = genai.Client(http_options=HttpOptions(api_version="v1alpha", timeout=timeout_ms))
     
@@ -228,6 +231,13 @@ class GeminiLLM(LLM):
             'system_instruction': system_prompt,
         }
         
+        # Add thinking config if set
+        if self.thinking_level:
+            config_params['thinking_config'] = types.ThinkingConfig(
+                include_thoughts=True,
+                thinking_level=types.ThinkingLevel(self.thinking_level.upper()),
+            )
+
         # Add tools if provided (convert to Gemini format)
         if tools:
             gemini_tools = []
@@ -252,7 +262,13 @@ class GeminiLLM(LLM):
             if candidate.content and candidate.content.parts:
                 for part in candidate.content.parts:
                     if hasattr(part, 'text') and part.text:
-                        content_blocks.append(TextBlock(text=part.text))
+                        if getattr(part, 'thought', False):
+                            content_blocks.append(ThinkingBlock(
+                                text=part.text,
+                                thought_signature=getattr(part, 'thought_signature', None),
+                            ))
+                        else:
+                            content_blocks.append(TextBlock(text=part.text))
                     elif hasattr(part, 'function_call') and part.function_call:
                         fc = part.function_call
                         content_blocks.append(
@@ -260,7 +276,7 @@ class GeminiLLM(LLM):
                                 id=fc.id if hasattr(fc, 'id') else fc.name,
                                 name=fc.name,
                                 input=dict(fc.args),
-                                thought=getattr(part, 'thought', None),
+                                thought=getattr(part, 'thought', None) if isinstance(getattr(part, 'thought', None), str) else None,
                                 thought_signature=getattr(part, 'thought_signature', None)
                             )
                         )
@@ -271,7 +287,7 @@ class GeminiLLM(LLM):
             usage = {
                 'prompt_tokens': getattr(response.usage_metadata, 'prompt_token_count', 0) or 0,
                 'completion_tokens': getattr(response.usage_metadata, 'candidates_token_count', 0) or 0,
-                'total_tokens': getattr(response.usage_metadata, 'total_token_count', 0) or 0
+                'total_tokens': getattr(response.usage_metadata, 'total_token_count', 0) or 0,
             }
         
         # Extract finish reason
