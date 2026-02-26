@@ -285,9 +285,6 @@ class GeminiLLM(LLM):
                 'completion_tokens': getattr(response.usage_metadata, 'candidates_token_count', 0) or 0,
                 'total_tokens': getattr(response.usage_metadata, 'total_token_count', 0) or 0,
             }
-            thinking_tokens = getattr(response.usage_metadata, 'thoughts_token_count', 0) or 0
-            if thinking_tokens:
-                usage['thinking_tokens'] = thinking_tokens
         
         # Extract finish reason
         finish_reason = None

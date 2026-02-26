@@ -538,15 +538,11 @@ class MaximLogger(Logger):
             usage = message.usage or {}
             prompt_tokens = usage.get('prompt_tokens', 0)
             completion_tokens = usage.get('completion_tokens', 0)
-            thinking_tokens = usage.get('thinking_tokens', 0)
             tokens = {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": usage.get('total_tokens', prompt_tokens + completion_tokens)
             }
-
-            if thinking_tokens:
-                span.add_tag("thinking_tokens", str(thinking_tokens))
             
             # Setup Generation Log - user prompt first, then system prompt
             messages = [
