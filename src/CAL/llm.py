@@ -168,7 +168,7 @@ class AnthropicVertexLLM(LLM):
 class GeminiLLM(LLM):
     """Gemini LLM implementation"""
     
-    def __init__(self, api_key: str, model: str, max_tokens: int, thinking_level: Optional[str] = None):
+    def __init__(self, api_key: str, model: str, max_tokens: int, timeout_ms: int = 20_000, thinking_level: Optional[str] = None):
         """
         Initialize the Gemini Vertex LLM.
 
@@ -176,6 +176,7 @@ class GeminiLLM(LLM):
             api_key: API key for authentication
             model: Model name to use
             max_tokens: Maximum number of tokens for generation
+            timeout_ms: HTTP timeout in milliseconds (default: 20000 = 20 seconds)
             thinking_level: Optional thinking level for Gemini 3.x models.
                 Valid values: "minimal", "low", "medium", "high"
         """
@@ -188,7 +189,7 @@ class GeminiLLM(LLM):
         self.model = model
         self.thinking_level = thinking_level
         # Initialize client once to avoid duplicate API key warnings
-        self.client = genai.Client(http_options=HttpOptions(api_version="v1alpha"))
+        self.client = genai.Client(http_options=HttpOptions(api_version="v1alpha", timeout=timeout_ms))
     
     def generate_content(self, system_prompt: str, conversation_history: List[Message], tools: Optional[List[Tool]] = None) -> Message:
         """
