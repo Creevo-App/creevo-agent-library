@@ -39,6 +39,8 @@ class ContentBlock(ABC):
         block_type = data.get("type")
         if block_type == "text":
             return TextBlock.from_dict(data)
+        elif block_type == "thinking":
+            return ThinkingBlock.from_dict(data)
         elif block_type == "image":
             return ImageBlock.from_dict(data)
         elif block_type == "tool_use":
@@ -189,6 +191,34 @@ class ImageBlock(ContentBlock):
     def clone(self) -> 'ImageBlock':
         """Create a deep copy of this image block."""
         return ImageBlock(source=self.source.clone())
+
+
+class ThinkingBlock(ContentBlock):
+    """Thinking/reasoning content block (Gemini thinking mode)"""
+
+    def __init__(self, text: str):
+        super().__init__()
+        self.type = "thinking"
+        self.text = text
+
+    def __repr__(self):
+        return f"ThinkingBlock(text={self.text!r})"
+
+    def claude_content_form(self):
+        return {'type': 'thinking', 'text': self.text}
+
+    def gemini_content_form(self):
+        return types.Part(text=self.text, thought=True)
+
+    def to_dict(self) -> dict:
+        return {"type": "thinking", "text": self.text}
+
+    @staticmethod
+    def from_dict(data: dict) -> 'ThinkingBlock':
+        return ThinkingBlock(text=data.get("text", ""))
+
+    def clone(self) -> 'ThinkingBlock':
+        return ThinkingBlock(text=self.text)
 
 
 class ToolUseBlock(ContentBlock):

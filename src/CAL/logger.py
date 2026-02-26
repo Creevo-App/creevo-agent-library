@@ -6,7 +6,7 @@ Abstract Logger interface for Maxim AI and LangSmith
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 from .message import Message
-from .content_blocks import ToolUseBlock, ToolResultBlock
+from .content_blocks import ThinkingBlock, ToolUseBlock, ToolResultBlock
 
 # LangSmith imports
 import os
@@ -249,20 +249,25 @@ class LangSmithLogger(Logger):
             span.set_attribute("session.id", self.agent_name)
             span.set_attribute("langsmith.metadata.iteration", iteration)
 
-            # Format content
+            # Format content — separate thinking from output
+            thinking_parts = []
             content_parts = []
             if isinstance(message.content, list):
                 for block in message.content:
-                    if hasattr(block, 'text'):
+                    if isinstance(block, ThinkingBlock):
+                        thinking_parts.append(block.text)
+                    elif hasattr(block, 'text'):
                         content_parts.append(block.text)
                     elif isinstance(block, ToolUseBlock):
                         content_parts.append(f"[Tool Use: {block.name}({json.dumps(block.input)})]")
             else:
                 content_parts.append(str(message.content))
-            
+
             content_text = " ".join(content_parts)
             span.set_attribute("gen_ai.completion.0.role", message.role.value)
             span.set_attribute("gen_ai.completion.0.content", content_text)
+            if thinking_parts:
+                span.set_attribute("gen_ai.completion.0.thinking", "\n".join(thinking_parts))
 
             # Token usage
             usage = message.usage or {}
@@ -533,11 +538,15 @@ class MaximLogger(Logger):
             usage = message.usage or {}
             prompt_tokens = usage.get('prompt_tokens', 0)
             completion_tokens = usage.get('completion_tokens', 0)
+            thinking_tokens = usage.get('thinking_tokens', 0)
             tokens = {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": usage.get('total_tokens', prompt_tokens + completion_tokens)
             }
+
+            if thinking_tokens:
+                span.add_tag("thinking_tokens", str(thinking_tokens))
             
             # Setup Generation Log - user prompt first, then system prompt
             messages = [
@@ -553,17 +562,23 @@ class MaximLogger(Logger):
                 "model_parameters": {}, 
             })
             
-            # Log the result
+            # Log the result — separate thinking from output content
+            thinking_parts = []
             content_parts = []
             if isinstance(message.content, list):
                 for block in message.content:
-                    if hasattr(block, 'text'):
+                    if isinstance(block, ThinkingBlock):
+                        thinking_parts.append(block.text)
+                    elif hasattr(block, 'text'):
                         content_parts.append(block.text)
                     elif isinstance(block, ToolUseBlock):
                         content_parts.append(f"[Tool Use: {block.name}({json.dumps(block.input)})]")
             else:
                 content_parts.append(str(message.content))
             content_text = " ".join(content_parts)
+
+            if thinking_parts:
+                span.add_tag("thinking", "\n".join(thinking_parts))
             created_time = int(end_time / 1e9) if end_time else int(time.time())
             
             generation.result({
