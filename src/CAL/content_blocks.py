@@ -196,10 +196,11 @@ class ImageBlock(ContentBlock):
 class ThinkingBlock(ContentBlock):
     """Thinking/reasoning content block (Gemini thinking mode)"""
 
-    def __init__(self, text: str):
+    def __init__(self, text: str, thought_signature: str = None):
         super().__init__()
         self.type = "thinking"
         self.text = text
+        self.thought_signature = thought_signature
 
     def __repr__(self):
         return f"ThinkingBlock(text={self.text!r})"
@@ -208,17 +209,29 @@ class ThinkingBlock(ContentBlock):
         return {'type': 'thinking', 'text': self.text}
 
     def gemini_content_form(self):
-        return types.Part(text=self.text, thought=True)
+        part_args = {"text": self.text, "thought": True}
+        if self.thought_signature:
+            part_args["thought_signature"] = self.thought_signature
+        return types.Part(**part_args)
 
     def to_dict(self) -> dict:
-        return {"type": "thinking", "text": self.text}
+        thought_signature = self.thought_signature
+        if isinstance(thought_signature, bytes):
+            thought_signature = base64.b64encode(thought_signature).decode('utf-8')
+        return {"type": "thinking", "text": self.text, "thought_signature": thought_signature}
 
     @staticmethod
     def from_dict(data: dict) -> 'ThinkingBlock':
-        return ThinkingBlock(text=data.get("text", ""))
+        thought_signature = data.get("thought_signature")
+        if thought_signature and isinstance(thought_signature, str):
+            try:
+                thought_signature = base64.b64decode(thought_signature)
+            except Exception:
+                pass
+        return ThinkingBlock(text=data.get("text", ""), thought_signature=thought_signature)
 
     def clone(self) -> 'ThinkingBlock':
-        return ThinkingBlock(text=self.text)
+        return ThinkingBlock(text=self.text, thought_signature=self.thought_signature)
 
 
 class ToolUseBlock(ContentBlock):

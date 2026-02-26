@@ -262,7 +262,10 @@ class GeminiLLM(LLM):
                 for part in candidate.content.parts:
                     if hasattr(part, 'text') and part.text:
                         if getattr(part, 'thought', False):
-                            content_blocks.append(ThinkingBlock(text=part.text))
+                            content_blocks.append(ThinkingBlock(
+                                text=part.text,
+                                thought_signature=getattr(part, 'thought_signature', None),
+                            ))
                         else:
                             content_blocks.append(TextBlock(text=part.text))
                     elif hasattr(part, 'function_call') and part.function_call:
