@@ -9,6 +9,7 @@ load_dotenv(Path(__file__).parent / ".env")
 from CAL.agent import Agent
 from CAL.content_blocks import TextBlock, ToolResultBlock, ToolUseBlock
 from CAL.logger import LangSmithLogger, MaximLogger
+from CAL.memory import FullCompressionMemory
 from CAL.message import Message, MessageRole
 from conftest import QueueLLM
 

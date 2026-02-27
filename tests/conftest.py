@@ -16,6 +16,7 @@ load_dotenv(Path(__file__).parent / ".env")
 from CAL.content_blocks import TextBlock, ToolResultBlock, ToolUseBlock
 from CAL.llm import LLM
 from CAL.logger import Logger
+from CAL.memory import FullCompressionMemory
 from CAL.message import Message, MessageRole
 from CAL.tool import Tool
 
@@ -94,15 +95,20 @@ class FakeLLM(LLM):
     """Minimal LLM for testing that returns a simple summary."""
     def __init__(self):
         super().__init__(max_tokens=128, name="fake-llm", provider="test")
-        self.calls = []
 
     def generate_content(self, system_prompt: str, conversation_history: List[Message], tools: Optional[List[Tool]] = None) -> Message:
-        self.calls.append({
-            "system_prompt": system_prompt,
-            "history": list(conversation_history),
-            "tools": list(tools or []),
-        })
         return Message(role=MessageRole.ASSISTANT, content=[TextBlock(text="[Summary]")])
+
+
+class TrackingMemory(FullCompressionMemory):
+    def __init__(self, summarizer_llm: Optional[LLM] = None, max_tokens: int = 50000, messages: Optional[List[Message]] = None):
+        llm = summarizer_llm or FakeLLM()
+        super().__init__(summarizer_llm=llm, max_tokens=max_tokens, messages=messages)
+        self.clone_called = False
+
+    def clone(self) -> "TrackingMemory":
+        self.clone_called = True
+        return TrackingMemory(summarizer_llm=self.summarizer_llm, max_tokens=self.max_tokens, messages=list(self._messages))
 
 
 def make_text_message(role: MessageRole, text: str) -> Message:
@@ -128,3 +134,6 @@ def fake_logger() -> FakeLogger:
     return FakeLogger()
 
 
+@pytest.fixture
+def tracking_memory() -> TrackingMemory:
+    return TrackingMemory()
