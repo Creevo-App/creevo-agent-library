@@ -1,6 +1,7 @@
 """SubAgent classes for CAL - enables multi-agent delegation."""
 
 import inspect
+import uuid
 from typing import Callable, List
 
 from google.genai import types
@@ -9,6 +10,7 @@ from .agent import Agent
 from .tool import Tool
 from .content_blocks import ToolResultBlock, TextBlock
 from .llm import LLM
+from .memory_engine import ContextPolicy
 
 
 class SubAgentTool(Tool):
@@ -75,30 +77,13 @@ class SubAgentTool(Tool):
                 name=self.name
             )
 
-        # Clone parent's memory to give sub-agent full context
-        sub_memory = self._parent_agent.memory.clone()
+        sub_agent_name = f"{self._parent_agent.agent_name}_sub_{self.name}"
 
-        # Apply sub-agent's max_tokens to the cloned memory for correct compression threshold.
-        # Priority: 1) explicit sub_max_tokens, 2) parent memory's max_tokens (compression threshold),
-        # 3) fallback to parent agent's max_tokens (for custom Memory implementations without max_tokens).
-        # Note: The abstract Memory base class doesn't define max_tokens—only FullCompressionMemory does.
-        # Custom Memory implementations may omit it, so we check with hasattr before accessing.
+        # Apply sub-agent max_tokens preference when provided.
         if self.sub_max_tokens is not None:
             effective_max_tokens = self.sub_max_tokens
-        elif hasattr(self._parent_agent.memory, 'max_tokens'):
-            effective_max_tokens = self._parent_agent.memory.max_tokens
         else:
             effective_max_tokens = self._parent_agent.max_tokens
-        if hasattr(sub_memory, 'max_tokens'):
-            sub_memory.max_tokens = effective_max_tokens
-
-        # Update agent_name and archiver to use sub-agent's identity (not parent's)
-        sub_agent_name = f"{self._parent_agent.agent_name}_sub_{self.name}"
-        if hasattr(sub_memory, 'agent_name'):
-            sub_memory.agent_name = sub_agent_name
-        if hasattr(sub_memory, 'archiver'):
-            from .compression import CompressionArchiver
-            sub_memory.archiver = CompressionArchiver(agent_name=sub_agent_name)
 
         # Create child logger for nested span logging
         # Pass sub_agent_name so logging metadata reflects the subagent, not the parent
@@ -109,20 +94,26 @@ class SubAgentTool(Tool):
                 agent_name=sub_agent_name
             )
 
-        # Update sub_memory's logger so compression events are logged under the subagent,
-        # not the parent agent. The cloned memory inherits the parent's logger by default.
-        # Only update if we actually created a child logger; otherwise preserve the cloned logger.
-        if hasattr(sub_memory, 'logger') and child_logger is not None:
-            sub_memory.logger = child_logger
+        # Create sub-agent with its own LLM configuration.
+        parent_policy = self._parent_agent.context_policy or ContextPolicy()
+        sub_policy = ContextPolicy(**parent_policy.__dict__)
+        if self.sub_max_tokens is not None:
+            sub_policy.total_token_budget = max(1024, int(self.sub_max_tokens))
 
-        # Create sub-agent with its own LLM configuration
+        # Each invocation gets a unique thread_id so that conversation history
+        # from previous invocations of the same subagent tool doesn't leak in.
+        invocation_thread_id = f"{sub_agent_name}:{uuid.uuid4().hex[:12]}"
+
         sub_agent = Agent(
             llm=self.sub_llm,
             system_prompt=self.system_prompt,
             max_calls=self.sub_max_calls,
             max_tokens=effective_max_tokens,
-            memory=sub_memory,
+            memory_engine=self._parent_agent.memory_engine,
+            context_policy=sub_policy,
             agent_name=sub_agent_name,
+            thread_id=invocation_thread_id,
+            resource_id=self._parent_agent.resource_id,
             tools=list(self.sub_tools),
             logger=child_logger,
         )

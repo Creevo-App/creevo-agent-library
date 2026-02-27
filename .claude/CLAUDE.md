@@ -3,16 +3,17 @@
 ## Architecture Overview
 
 - CAL is a Python library for building agentic AI applications
-- Main components: `Agent`, `LLM` (GeminiLLM), `Memory`, `Tool`, `Message`, `SubAgentTool`, `MCPTool`
+- Main components: `Agent`, `LLM` (GeminiLLM), `DefaultMemoryEngine`, `Tool`, `Message`, `SubAgentTool`, `MCPTool`
 - Package: `creevo-agent-library` (installed from GitHub: https://github.com/Creevo-App/creevo-agent-library)
 
 ## Memory Management
 
-- Use `FullCompressionMemory` for long-running agent tasks (summarizes middle turns)
-- Memory serializes to JSON for persistence across requests
-- Session state passed via `CONVERSATION_STATE` environment variable
-- Agent emits `__CAL_SESSION_STATE__` prefix for state serialization
-- Custom Memory implementations MUST implement `clone()` method (abstract in base class) for subagent support
+- `DefaultMemoryEngine` is the only memory system — scoped threads, semantic recall, working memory, archive summaries
+- Agent auto-creates a `DefaultMemoryEngine` if none is provided
+- Optional `summarizer_llm` param on `DefaultMemoryEngine` enables LLM-based archive compression (falls back to naive text truncation)
+- Optional `archiver` param writes full archived context to disk via `CompressionArchiver`
+- SubAgents share the parent's engine with separate `thread_id` and shared `resource_id`
+- Migration utils (`migrate_legacy_memory_json`, `migrate_legacy_memory_payload`) available for one-time import of legacy payloads
 
 ## SubAgent Architecture
 
@@ -44,7 +45,7 @@ async def code_reviewer(task: str):
 
 ### Key Behaviors
 
-- SubAgents inherit the parent's full conversation history via `memory.clone()`
+- SubAgents share the parent's `memory_engine` with a separate `thread_id` for isolation and shared `resource_id` for cross-agent semantic recall
 - Each subagent is its own distinct tool with predefined `system_prompt`, `tools`, and `llm` (model configuration)
 - Subagents use their own LLM instance, allowing different models for different subagents
 - Nesting is supported (subagents can include other subagents in their tools list)
@@ -118,7 +119,7 @@ mcp_tools = await connect_mcp_server(command="npx", args=["-y", "@upstash/contex
 # Pass MCP tools to an Agent like any other tool
 agent = Agent(
     llm=llm, system_prompt="...", max_calls=10, max_tokens=4096,
-    memory=memory, agent_name="mcp-agent",
+    agent_name="mcp-agent",
     tools=[StopTool(), *mcp_tools],
 )
 result = await agent.run_async("What does React useEffect do?")
