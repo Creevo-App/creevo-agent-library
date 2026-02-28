@@ -1,13 +1,5 @@
 """Custom tools for the Weather Agent using Open-Meteo API."""
 
-import sys
-from pathlib import Path
-
-# Add src directory to path to use local CAL code
-_src_path = Path(__file__).resolve().parent.parent.parent / "src"
-if str(_src_path) not in sys.path:
-    sys.path.insert(0, str(_src_path))
-
 import httpx
 
 from CAL import tool

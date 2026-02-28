@@ -5,7 +5,8 @@ A CAL agent that reports current weather conditions for any city
 using the free Open-Meteo API (no API key required).
 
 Prerequisites:
-    1. Set GEMINI_API_KEY in .env or environment
+    1. Install CAL: pip install git+https://github.com/Creevo-App/creevo-agent-library.git
+    2. Set GEMINI_API_KEY in .env or environment
 
 Usage:
     python -m examples.weather_agent.agent "What's the weather in Tokyo?"
@@ -17,16 +18,10 @@ Usage:
 import asyncio
 import os
 import sys
-from pathlib import Path
-
-# Add src directory to path to use local CAL code
-_src_path = Path(__file__).resolve().parent.parent.parent / "src"
-if str(_src_path) not in sys.path:
-    sys.path.insert(0, str(_src_path))
 
 from dotenv import load_dotenv
 
-from CAL import Agent, GeminiLLM, StopTool, DefaultMemoryEngine, ContextPolicy
+from CAL import Agent, GeminiLLM, StopTool, FullCompressionMemory
 from CAL.content_blocks import TextBlock
 from CAL.message import MessageRole
 
@@ -54,14 +49,16 @@ async def create_weather_agent() -> Agent:
         max_tokens=4096,
     )
     
-    context_policy = ContextPolicy(
-        total_token_budget=50_000,
-        recent_tokens=18_000,
-        semantic_tokens=12_000,
-        working_tokens=5_000,
+    summarizer_llm = GeminiLLM(
+        model="gemini-2.0-flash",
+        api_key=GEMINI_API_KEY,
+        max_tokens=2048,
     )
     
-    memory_engine = DefaultMemoryEngine(context_policy=context_policy)
+    memory = FullCompressionMemory(
+        summarizer_llm=summarizer_llm,
+        max_tokens=50_000,
+    )
     
     tools = [
         StopTool(),
@@ -74,8 +71,7 @@ async def create_weather_agent() -> Agent:
         system_prompt=SYSTEM_PROMPT,
         max_calls=10,
         max_tokens=4096,
-        memory_engine=memory_engine,
-        context_policy=context_policy,
+        memory=memory,
         agent_name="weather-agent",
         tools=tools,
     )

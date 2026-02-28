@@ -21,7 +21,7 @@ TAVILY_API=your_tavily_api_key
 2. Install dependencies:
 
 ```bash
-pip install CAL python-dotenv httpx
+pip install git+https://github.com/Creevo-App/creevo-agent-library.git python-dotenv httpx
 ```
 
 3. Run the agent:
@@ -75,16 +75,18 @@ async def web_search(query: str):
     }
 ```
 
-### 2. Memory Management with ContextPolicy
+### 2. Memory Management with FullCompressionMemory
 
 ```python
-memory_engine = DefaultMemoryEngine()
+summarizer_llm = GeminiLLM(
+    model='gemini-3-flash-preview',
+    api_key=os.getenv("GEMINI_API_KEY"),
+    max_tokens=2048
+)
 
-context_policy = ContextPolicy(
-    total_token_budget=50000,
-    recent_tokens=18000,
-    semantic_tokens=12000,
-    working_tokens=5000,
+memory = FullCompressionMemory(
+    summarizer_llm=summarizer_llm,
+    max_tokens=50000,
 )
 ```
 
@@ -100,10 +102,7 @@ agent = Agent(
     system_prompt=SYSTEM_PROMPT,
     max_calls=50,
     max_tokens=4096,
-    memory_engine=memory_engine,
-    context_policy=context_policy,
-    thread_id="research-thread",
-    resource_id="research-user",
+    memory=memory,
     agent_name="research-assistant",
     tools=[StopTool(), web_search, ...]
 )

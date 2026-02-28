@@ -8,7 +8,8 @@ This example demonstrates how to build a complete agent using the CAL library.
 It's designed to be easy to follow and modify for your own projects.
 
 Prerequisites:
-    1. Set GEMINI_API_KEY in .env or environment
+    1. Install CAL: pip install git+https://github.com/Creevo-App/creevo-agent-library.git
+    2. Set GEMINI_API_KEY in .env or environment
        Get a free API key at: https://makersuite.google.com/app/apikey
 
 Usage:
@@ -32,23 +33,11 @@ What You'll Learn:
 import asyncio
 import os
 import sys
-from pathlib import Path
 
-# =============================================================================
-# PATH SETUP
-# This lets us import from the local CAL source code
-# =============================================================================
-_src_path = Path(__file__).resolve().parent.parent.parent / "src"
-if str(_src_path) not in sys.path:
-    sys.path.insert(0, str(_src_path))
-
-# =============================================================================
-# IMPORTS
-# =============================================================================
 from dotenv import load_dotenv
 
 # CAL library imports
-from CAL import Agent, GeminiLLM, StopTool, DefaultMemoryEngine, ContextPolicy
+from CAL import Agent, GeminiLLM, StopTool, FullCompressionMemory
 from CAL.content_blocks import TextBlock
 from CAL.message import MessageRole
 
@@ -107,21 +96,20 @@ async def create_research_agent() -> Agent:
         max_tokens=4096,  # Maximum response length
     )
     
-    # Step 3: Configure the context policy
-    # This controls how much conversation history the agent remembers
-    # Token budgets determine how much context goes to the LLM
-    context_policy = ContextPolicy(
-        total_token_budget=50_000,  # Total tokens available for context
-        recent_tokens=18_000,       # Recent conversation turns
-        semantic_tokens=12_000,     # Semantically relevant past context
-        working_tokens=5_000,       # Working memory (important facts)
+    # Step 3: Create memory with compression support
+    # Uses a summarizer LLM for intelligent context compression
+    summarizer_llm = GeminiLLM(
+        model="gemini-2.0-flash",
+        api_key=GEMINI_API_KEY,
+        max_tokens=2048,
     )
     
-    # Step 4: Create the memory engine
-    # This manages the agent's conversation history and context
-    memory_engine = DefaultMemoryEngine(context_policy=context_policy)
+    memory = FullCompressionMemory(
+        summarizer_llm=summarizer_llm,
+        max_tokens=50_000,
+    )
     
-    # Step 5: Register tools
+    # Step 4: Register tools
     # Tools are functions the agent can call to perform actions
     tools = [
         StopTool(),       # Built-in: signals task completion
@@ -131,15 +119,14 @@ async def create_research_agent() -> Agent:
         read_notes,       # Our custom: read saved notes
     ]
     
-    # Step 6: Create the agent
+    # Step 5: Create the agent
     # This brings everything together
     agent = Agent(
         llm=llm,                         # The language model to use
         system_prompt=SYSTEM_PROMPT,     # Agent's instructions/personality
         max_calls=15,                    # Max tool calls per run (safety limit)
         max_tokens=4096,                 # Max tokens per response
-        memory_engine=memory_engine,     # How to manage context
-        context_policy=context_policy,   # Memory budgets
+        memory=memory,                   # How to manage context
         agent_name="research-partner",   # Name for logging
         tools=tools,                     # Available tools
     )

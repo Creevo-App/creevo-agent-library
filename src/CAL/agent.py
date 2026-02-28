@@ -48,11 +48,14 @@ class Agent:
         Initialize the agent.
         
         Args:
-            llm: The LLM instance to use
-            system_prompt: System prompt for the agent
-            max_calls: Maximum number of tool calls allowed
-            max_tokens: Maximum tokens for generation
+            llm: The LLM instance to use for generating responses
+            system_prompt: System prompt defining the agent's behavior
+            max_calls: Maximum number of tool calls allowed per run
+            max_tokens: Maximum tokens for LLM generation
+            memory: Memory instance for conversation history (e.g., FullCompressionMemory)
+            agent_name: Name identifier for the agent (used in logging)
             tools: Optional list of tools to register with the agent
+            logger: Optional Logger instance for tracing and observability
         """
         self.llm = llm
         self.tools: List[Tool] = tools if tools is not None else []
