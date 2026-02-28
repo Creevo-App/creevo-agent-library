@@ -3,7 +3,7 @@ name: Multi-Agent Architecture
 overview: Add a subagent primitive to CAL that users import to define specialized sub-agent tools. Each subagent is its own distinct tool with predefined system_prompt and tools. When called, it inherits the parent's full context, runs its own loop, and returns results.
 todos:
   - id: memory-clone
-    content: Add clone() method to FullCompressionMemory
+    content: Add memory sharing to DefaultMemoryEngine (subagents share engine with separate thread_id)
     status: completed
   - id: subagent-class
     content: Create SubAgentTool class in tool.py
@@ -30,6 +30,8 @@ flowchart TD
     SubAgent1 -->|"runs own loop with review_tool, lint_tool"| SubAgent1
     SubAgent1 -->|"final response"| MainAgent
 ```
+
+
 
 ## User-Facing API
 
@@ -153,15 +155,21 @@ for tool in self.tools:
         tool.bind_parent(self)
 ```
 
-### 4. Add clone() to FullCompressionMemory in [src/CAL/memory.py](src/CAL/memory.py)
+### 4. Memory Sharing via DefaultMemoryEngine
+
+SubAgents share the parent's `DefaultMemoryEngine` with:
+
+- Separate `thread_id` for isolated conversation history
+- Shared `resource_id` for cross-agent semantic recall
 
 ```python
-def clone(self) -> 'FullCompressionMemory':
-    """Create a deep copy of this memory."""
-    return FullCompressionMemory(
-        max_items=self.max_items,
-        messages=list(self._messages)
-    )
+# SubAgentTool creates a child agent sharing the memory engine
+sub_agent = Agent(
+    memory_engine=parent.memory_engine,
+    thread_id=f"{parent.thread_id}::{self.name}",
+    resource_id=parent.resource_id,
+    ...
+)
 ```
 
 ## Nesting Support
@@ -178,9 +186,10 @@ async def outer_agent(task: str):
     pass
 ```
 
-## Files to Modify
+## Files Modified
 
-- [src/CAL/tool.py](src/CAL/tool.py) - Add `SubAgentTool` class and `subagent` decorator
-- [src/CAL/agent.py](src/CAL/agent.py) - Bind subagent tools to parent in `__init__`
-- [src/CAL/memory.py](src/CAL/memory.py) - Add `clone()` method
-- [src/CAL/**init**.py](src/CAL/__init__.py) - Export `subagent` and `SubAgentTool`
+- `src/CAL/subagent.py` - `SubAgentTool` class and `@subagent` decorator
+- `src/CAL/agent.py` - Bind subagent tools to parent in `__init__`
+- `src/CAL/memory_engine.py` - `DefaultMemoryEngine` with multi-layer memory
+- `src/CAL/__init__.py` - Export `subagent` and `SubAgentTool`
+

@@ -14,11 +14,12 @@ alwaysApply: false
 
 ## Memory Management
 
-- Use `FullCompressionMemory` for long-running agent tasks (summarizes middle turns)
-- Memory serializes to JSON for persistence across requests
-- Session state passed via `CONVERSATION_STATE` environment variable
-- Agent emits `__CAL_SESSION_STATE__` prefix for state serialization
-- Custom Memory implementations MUST implement `clone()` method (abstract in base class) for subagent support
+- `DefaultMemoryEngine` is the only memory system — scoped threads, semantic recall, working memory, archive summaries
+- Agent auto-creates a `DefaultMemoryEngine` if none is provided
+- Optional `summarizer_llm` param on `DefaultMemoryEngine` enables LLM-based archive compression (falls back to naive text truncation)
+- Optional `archiver` param writes full archived context to disk via `CompressionArchiver`
+- SubAgents share the parent's engine with separate `thread_id` and shared `resource_id`
+- Migration utils (`migrate_legacy_memory_json`, `migrate_legacy_memory_payload`) available for one-time import of legacy payloads
 
 ## SubAgent Architecture
 
