@@ -39,6 +39,8 @@ class ContentBlock(ABC):
         block_type = data.get("type")
         if block_type == "text":
             return TextBlock.from_dict(data)
+        elif block_type == "thinking":
+            return ThinkingBlock.from_dict(data)
         elif block_type == "image":
             return ImageBlock.from_dict(data)
         elif block_type == "tool_use":
@@ -189,6 +191,47 @@ class ImageBlock(ContentBlock):
     def clone(self) -> 'ImageBlock':
         """Create a deep copy of this image block."""
         return ImageBlock(source=self.source.clone())
+
+
+class ThinkingBlock(ContentBlock):
+    """Thinking/reasoning content block (Gemini thinking mode)"""
+
+    def __init__(self, text: str, thought_signature: str = None):
+        super().__init__()
+        self.type = "thinking"
+        self.text = text
+        self.thought_signature = thought_signature
+
+    def __repr__(self):
+        return f"ThinkingBlock(text={self.text!r})"
+
+    def claude_content_form(self):
+        return {'type': 'thinking', 'text': self.text}
+
+    def gemini_content_form(self):
+        part_args = {"text": self.text, "thought": True}
+        if self.thought_signature:
+            part_args["thought_signature"] = self.thought_signature
+        return types.Part(**part_args)
+
+    def to_dict(self) -> dict:
+        thought_signature = self.thought_signature
+        if isinstance(thought_signature, bytes):
+            thought_signature = base64.b64encode(thought_signature).decode('utf-8')
+        return {"type": "thinking", "text": self.text, "thought_signature": thought_signature}
+
+    @staticmethod
+    def from_dict(data: dict) -> 'ThinkingBlock':
+        thought_signature = data.get("thought_signature")
+        if thought_signature and isinstance(thought_signature, str):
+            try:
+                thought_signature = base64.b64decode(thought_signature)
+            except Exception:
+                pass
+        return ThinkingBlock(text=data.get("text", ""), thought_signature=thought_signature)
+
+    def clone(self) -> 'ThinkingBlock':
+        return ThinkingBlock(text=self.text, thought_signature=self.thought_signature)
 
 
 class ToolUseBlock(ContentBlock):
