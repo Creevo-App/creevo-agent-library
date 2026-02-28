@@ -4,10 +4,13 @@
       "content": "All code examples and documentation should use \"gemini-3-flash-preview\" as the model name. This applies to every LLM instantiation example, configuration snippet, and usage demonstration throughout the wiki. For example, GeminiLLM should always be shown with model=\"gemini-3-flash-preview\"."
     },
     {
-      "content": "CAL (Creevo Agent Library) is a Python library for building agentic AI applications. Core components include Agent, GeminiLLM, Memory, Tool, SubAgentTool, and MCPTool. The package is installed from GitHub: https://github.com/Creevo-App/creevo-agent-library"
+      "content": "CAL (Creevo Agent Library) is a Python library for building agentic AI applications. Core components include Agent, GeminiLLM, DefaultMemoryEngine, Tool, SubAgentTool, and MCPTool. The package is installed from GitHub: https://github.com/Creevo-App/creevo-agent-library"
     },
     {
       "content": "CAL requires Python >= 3.10. This is because CAL uses the union type syntax (X | Y) for type hints, which was introduced in PEP 604 and requires Python 3.10+."
+    },
+    {
+      "content": "DefaultMemoryEngine is the only memory system in CAL. It provides multi-layer memory with scoped threads, semantic recall, working memory, and archive summaries. Agent auto-creates a DefaultMemoryEngine if none is provided. The old FullCompressionMemory class has been removed and replaced by DefaultMemoryEngine."
     }
   ]
 }
