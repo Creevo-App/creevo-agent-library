@@ -17,7 +17,7 @@ from CAL.mcp import (
 from CAL.tool import StopTool
 from CAL.agent import Agent
 from CAL.message import Message, MessageRole
-from conftest import QueueLLM
+from conftest import QueueLLM, TrackingMemory
 
 
 # -- Helpers ----------------------------------------------------------------
@@ -265,7 +265,7 @@ class TestMCPToolInAgentLoop:
         agent = Agent(
             llm=QueueLLM(responses), system_prompt="You are helpful.",
             max_calls=5, max_tokens=4096,
-            agent_name="mcp-test",
+            memory=TrackingMemory(), agent_name="mcp-test",
             tools=[mcp_tool, StopTool()],
         )
         await agent.run_async("test query")
