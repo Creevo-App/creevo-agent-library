@@ -1,185 +1,353 @@
-"""Custom tools for the Research Partner agent."""
+"""
+Custom Tools for the Research Partner Agent
 
-from datetime import datetime
+This file demonstrates how to create tools for your CAL agent.
+
+Key concepts:
+1. Use the @tool decorator to turn any async function into an agent tool
+2. Tools must return a dict with 'content' and 'metadata' keys
+3. 'content' is a list of content blocks (usually text) that the LLM sees
+4. 'metadata' is extra data you can use for logging/debugging
+
+The @tool decorator automatically:
+- Extracts the function name as the tool name
+- Uses the docstring as the tool description (shown to the LLM)
+- Converts function parameters to the tool's input schema
+"""
+
+import sys
 from pathlib import Path
+from datetime import datetime
+
+# Add src directory to path to use local CAL code
+_src_path = Path(__file__).resolve().parent.parent.parent / "src"
+if str(_src_path) not in sys.path:
+    sys.path.insert(0, str(_src_path))
+
+import httpx
 
 from CAL import tool
 
-RESEARCH_NOTES_DIR = Path(__file__).parent / "notes"
+# Directory where we'll save research notes
+NOTES_DIR = Path(__file__).parent / "notes"
+
+# DuckDuckGo API endpoint (free, no API key required!)
+DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/"
 
 
-def ensure_notes_directory():
-    """Create the research-notes directory if it doesn't exist."""
-    RESEARCH_NOTES_DIR.mkdir(parents=True, exist_ok=True)
-
+# =============================================================================
+# TOOL 1: Web Search (using DuckDuckGo)
+# =============================================================================
 
 @tool
-async def save_research_note(
-    topic: str,
-    content: str,
-    sources: str = "",
-) -> dict:
+async def web_search(query: str, num_results: int = 5) -> dict:
     """
-    Save a research note to the research-notes folder.
+    Search the web for information on any topic using DuckDuckGo.
+    
+    Use this tool to find relevant web pages, articles, and information
+    about any topic. Returns titles, snippets, and URLs.
     
     Args:
-        topic: The research topic or title for this note
-        content: The main content/findings to save
-        sources: Optional list of source URLs or references used
+        query: The search term or question to look up
+        num_results: Maximum number of results to return (default: 5)
     
     Returns:
-        Confirmation of the saved note with its file path
+        A list of search results with titles, snippets, and URLs
     """
-    ensure_notes_directory()
+    import re
     
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    
+    data = {"q": query, "b": ""}
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                DUCKDUCKGO_HTML_URL,
+                data=data,
+                headers=headers,
+                follow_redirects=True,
+            )
+            response.raise_for_status()
+            html = response.text
+    except Exception as e:
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"Search failed: {str(e)}. Please try again.",
+                }
+            ],
+            "metadata": {"error": True, "query": query},
+        }
+    
+    results = []
+    
+    result_pattern = re.compile(
+        r'<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>(.+?)</a>.*?'
+        r'<a class="result__snippet"[^>]*>(.+?)</a>',
+        re.DOTALL
+    )
+    
+    for match in result_pattern.finditer(html):
+        if len(results) >= num_results:
+            break
+        
+        url = match.group(1)
+        title = re.sub(r'<[^>]+>', '', match.group(2)).strip()
+        snippet = re.sub(r'<[^>]+>', '', match.group(3)).strip()
+        
+        if url and title:
+            results.append({
+                "title": title,
+                "url": url,
+                "snippet": snippet,
+            })
+    
+    if not results:
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"No results found for '{query}'. Try different search terms.",
+                }
+            ],
+            "metadata": {"query": query, "results_count": 0},
+        }
+    
+    result_text = f"## Web Search Results for '{query}'\n\n"
+    result_text += f"Found {len(results)} result(s):\n\n"
+    
+    for i, result in enumerate(results, 1):
+        result_text += f"### {i}. {result['title']}\n"
+        result_text += f"**URL:** {result['url']}\n"
+        result_text += f"{result['snippet']}\n\n"
+    
+    result_text += "\n*Use `read_webpage` to read the full content of any page.*"
+    
+    return {
+        "content": [{"type": "text", "text": result_text}],
+        "metadata": {"query": query, "results_count": len(results), "results": results},
+    }
+
+
+# =============================================================================
+# TOOL 2: Read Webpage Content
+# =============================================================================
+
+@tool
+async def read_webpage(url: str) -> dict:
+    """
+    Read and extract the main text content from a webpage.
+    
+    Use this tool after searching to read the full content of a webpage.
+    It extracts the main text and removes navigation, ads, etc.
+    
+    Args:
+        url: The URL of the webpage to read
+    
+    Returns:
+        The main text content of the webpage
+    """
+    import re
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            html = response.text
+    except Exception as e:
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"Could not fetch webpage: {str(e)}",
+                }
+            ],
+            "metadata": {"error": True, "url": url},
+        }
+    
+    title_match = re.search(r'<title[^>]*>([^<]+)</title>', html, re.IGNORECASE)
+    title = title_match.group(1).strip() if title_match else "Unknown Page"
+    
+    for tag in ['script', 'style', 'nav', 'footer', 'header', 'aside', 'noscript']:
+        html = re.sub(f'<{tag}[^>]*>.*?</{tag}>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    
+    html = re.sub(r'<!--.*?-->', '', html, flags=re.DOTALL)
+    
+    text = re.sub(r'<[^>]+>', ' ', html)
+    
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+    
+    lines = []
+    for line in text.split('. '):
+        line = line.strip()
+        if len(line) > 20:
+            lines.append(line)
+    
+    text = '. '.join(lines)
+    
+    max_chars = 8000
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n\n... [Content truncated for brevity]"
+    
+    if len(text) < 100:
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"Could not extract meaningful content from {url}. The page might be JavaScript-heavy or protected.",
+                }
+            ],
+            "metadata": {"error": True, "url": url},
+        }
+    
+    result_text = f"## {title}\n\n**Source:** {url}\n\n---\n\n{text}"
+    
+    return {
+        "content": [{"type": "text", "text": result_text}],
+        "metadata": {
+            "title": title,
+            "url": url,
+            "char_count": len(text),
+        },
+    }
+
+
+# =============================================================================
+# TOOL 3: Save Notes
+# =============================================================================
+
+@tool
+async def save_note(topic: str, content: str) -> dict:
+    """
+    Save research notes to a file.
+    
+    Use this tool to save important findings, summaries, or any information
+    the user wants to remember for later.
+    
+    Args:
+        topic: A short title/topic for the note (used as filename)
+        content: The note content to save
+    
+    Returns:
+        Confirmation that the note was saved with file path
+    """
+    # Ensure the notes directory exists
+    NOTES_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # Create a safe filename from the topic
+    safe_topic = "".join(c if c.isalnum() or c in "- _" else "_" for c in topic)
+    safe_topic = safe_topic.strip().replace(" ", "_").lower()
+    
+    if not safe_topic:
+        safe_topic = "research_note"
+    
+    # Add timestamp to make filenames unique
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_topic = "".join(c if c.isalnum() or c in " -_" else "_" for c in topic)
-    safe_topic = safe_topic.replace(" ", "_")[:50]
-    filename = f"{timestamp}_{safe_topic}.md"
-    filepath = RESEARCH_NOTES_DIR / filename
+    filename = f"{safe_topic}_{timestamp}.md"
+    filepath = NOTES_DIR / filename
     
+    # Format the note with metadata
     note_content = f"""# {topic}
 
-**Date:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+*Saved on: {datetime.now().strftime("%B %d, %Y at %I:%M %p")}*
 
-## Research Findings
+---
 
 {content}
 """
     
-    if sources:
-        note_content += f"""
-## Sources
-
-{sources}
-"""
-    
+    # Write the note to file
     filepath.write_text(note_content, encoding="utf-8")
     
     return {
         "content": [
             {
                 "type": "text",
-                "text": f"Research note saved successfully to: {filepath}",
+                "text": f"Note saved successfully!\n\n**Topic:** {topic}\n**File:** {filename}\n**Location:** {filepath}",
             }
         ],
-        "metadata": {"filepath": str(filepath), "topic": topic},
+        "metadata": {"filename": filename, "filepath": str(filepath), "topic": topic},
     }
 
 
+# =============================================================================
+# TOOL 4: Read Notes
+# =============================================================================
+
 @tool
-async def append_to_research_note(
-    filename: str,
-    content: str,
-    section_title: str = "",
-) -> dict:
+async def read_notes(topic: str = "") -> dict:
     """
-    Append additional content to an existing research note.
+    Read saved research notes.
+    
+    Use this tool to recall previously saved research notes.
+    You can optionally filter by topic to find specific notes.
     
     Args:
-        filename: The filename of the existing note (in research-notes folder)
-        content: The content to append
-        section_title: Optional section heading for the appended content
+        topic: Optional topic to filter notes by (searches filenames)
     
     Returns:
-        Confirmation of the update
+        The content of matching notes or a list of available notes
     """
-    filepath = RESEARCH_NOTES_DIR / filename
+    # Ensure the notes directory exists
+    if not NOTES_DIR.exists():
+        return {
+            "content": [{"type": "text", "text": "No notes have been saved yet."}],
+            "metadata": {"notes_count": 0},
+        }
     
-    if not filepath.exists():
+    # Find all note files
+    note_files = list(NOTES_DIR.glob("*.md"))
+    
+    if not note_files:
+        return {
+            "content": [{"type": "text", "text": "No notes have been saved yet."}],
+            "metadata": {"notes_count": 0},
+        }
+    
+    # Filter by topic if specified
+    if topic:
+        topic_lower = topic.lower()
+        note_files = [f for f in note_files if topic_lower in f.stem.lower()]
+    
+    if not note_files:
         return {
             "content": [
                 {
                     "type": "text",
-                    "text": f"Error: Note file '{filename}' not found in research-notes folder",
+                    "text": f"No notes found matching '{topic}'. Try a different search term or leave topic empty to see all notes.",
                 }
             ],
-            "metadata": {"error": True},
+            "metadata": {"notes_count": 0, "filter": topic},
         }
     
-    append_content = "\n\n"
-    if section_title:
-        append_content += f"## {section_title}\n\n"
-    append_content += content
+    # Sort by modification time (newest first)
+    note_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
     
-    with filepath.open("a", encoding="utf-8") as f:
-        f.write(append_content)
+    # Read and combine note contents
+    result_text = "## Your Research Notes\n\n"
     
-    return {
-        "content": [
-            {
-                "type": "text",
-                "text": f"Content appended to: {filepath}",
-            }
-        ],
-        "metadata": {"filepath": str(filepath)},
-    }
-
-
-@tool
-async def list_research_notes() -> dict:
-    """
-    List all existing research notes in the research-notes folder.
+    if topic:
+        result_text += f"*Filtered by: '{topic}'*\n\n"
     
-    Returns:
-        A list of all note files with their topics and dates
-    """
-    ensure_notes_directory()
+    notes_data = []
+    for note_file in note_files[:5]:  # Limit to 5 most recent
+        content = note_file.read_text(encoding="utf-8")
+        result_text += f"---\n\n**File:** {note_file.name}\n\n{content}\n\n"
+        notes_data.append({"filename": note_file.name, "content": content})
     
-    notes = list(RESEARCH_NOTES_DIR.glob("*.md"))
-    
-    if not notes:
-        return {
-            "content": [
-                {"type": "text", "text": "No research notes found yet."}
-            ],
-            "metadata": {"count": 0},
-        }
-    
-    notes_list = []
-    for note in sorted(notes, key=lambda p: p.stat().st_mtime, reverse=True):
-        first_line = note.read_text(encoding="utf-8").split("\n")[0]
-        title = first_line.replace("# ", "") if first_line.startswith("# ") else note.stem
-        notes_list.append(f"- **{note.name}**: {title}")
+    if len(note_files) > 5:
+        result_text += f"\n*... and {len(note_files) - 5} more note(s)*"
     
     return {
-        "content": [
-            {
-                "type": "text",
-                "text": f"Found {len(notes)} research note(s):\n\n" + "\n".join(notes_list),
-            }
-        ],
-        "metadata": {"count": len(notes), "files": [n.name for n in notes]},
-    }
-
-
-@tool
-async def read_research_note(filename: str) -> dict:
-    """
-    Read the contents of an existing research note.
-    
-    Args:
-        filename: The filename of the note to read
-    
-    Returns:
-        The full content of the research note
-    """
-    filepath = RESEARCH_NOTES_DIR / filename
-    
-    if not filepath.exists():
-        return {
-            "content": [
-                {
-                    "type": "text",
-                    "text": f"Error: Note file '{filename}' not found",
-                }
-            ],
-            "metadata": {"error": True},
-        }
-    
-    content = filepath.read_text(encoding="utf-8")
-    
-    return {
-        "content": [{"type": "text", "text": content}],
-        "metadata": {"filepath": str(filepath)},
+        "content": [{"type": "text", "text": result_text}],
+        "metadata": {"notes_count": len(note_files), "notes": notes_data},
     }
