@@ -60,7 +60,9 @@ When the LLM calls `code_reviewer(task="Review the auth module")`, the subagent:
 
 ## Implementation
 
-### 1. Add SubAgentTool class to src/CAL/tool.py
+### 1. Add SubAgentTool class to src/CAL/subagent.py
+
+> **Note:** `SubAgentTool` lives in `subagent.py` (not `tool.py`) to avoid circular imports—`subagent.py` imports from both `agent.py` and `tool.py`, so placing it in `tool.py` would create a circular dependency.
 
 ```python
 class SubAgentTool(Tool):
@@ -97,7 +99,7 @@ class SubAgentTool(Tool):
         # 4. Extract and return final response
 ```
 
-### 2. Add subagent decorator to src/CAL/tool.py
+### 2. Add subagent decorator to src/CAL/subagent.py
 
 ```python
 def subagent(
@@ -171,6 +173,10 @@ async def outer_agent(task: str):
 ## Files Modified
 
 - `src/CAL/subagent.py` - `SubAgentTool` class and `@subagent` decorator
+- `src/CAL/mcp.py` - `MCPTool`, `MCPServerConnection`, `connect_mcp_server()`, `disconnect_mcp_tools()` (separate module)
+- `src/CAL/tool.py` - Base `Tool` class, `@tool` decorator, `StopTool` (no subagent code here)
 - `src/CAL/agent.py` - Bind subagent tools to parent in `__init__`
 - `src/CAL/memory_engine.py` - `DefaultMemoryEngine` with multi-layer memory
 - `src/CAL/__init__.py` - Export `subagent` and `SubAgentTool`
+
+> **Circular Import Note:** Both `subagent.py` and `mcp.py` are kept separate from `tool.py` to prevent circular imports with `agent.py`. These modules import from both `agent.py` and `tool.py`, so placing their classes in `tool.py` would create a circular dependency chain.
