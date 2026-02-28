@@ -17,6 +17,12 @@ Usage:
 import asyncio
 import os
 import sys
+from pathlib import Path
+
+# Add src directory to path to use local CAL code
+_src_path = Path(__file__).resolve().parent.parent.parent / "src"
+if str(_src_path) not in sys.path:
+    sys.path.insert(0, str(_src_path))
 
 from dotenv import load_dotenv
 
