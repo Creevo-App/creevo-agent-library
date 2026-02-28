@@ -4,16 +4,14 @@ CAL is a Python library for building agentic AI applications with LLM abstractio
 
 ## Installation
 
-Install from GitHub:
-
 ```bash
-pip install git+https://github.com/Creevo-App/creevo-agent-library.git
+pip install creevo-agent-library
 ```
 
-Or for a specific version:
+With MCP support:
 
 ```bash
-pip install git+https://github.com/Creevo-App/creevo-agent-library.git@v0.1.0
+pip install "creevo-agent-library[mcp]"
 ```
 
 ## Quick Start
