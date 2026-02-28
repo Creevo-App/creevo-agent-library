@@ -34,7 +34,7 @@ async def review_file(path: str):
 @subagent(
     system_prompt="You are a code reviewer...",
     tools=[review_file],
-    llm=GeminiLLM(api_key="...", model="gemini-2.0-flash-exp", max_tokens=8192),
+    llm=GeminiLLM(api_key="...", model="gemini-3-flash-preview", max_tokens=8192),
     max_calls=5
 )
 async def code_reviewer(task: str):

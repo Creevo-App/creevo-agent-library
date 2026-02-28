@@ -21,10 +21,10 @@ import os
 from CAL import Agent, GeminiLLM, StopTool, FullCompressionMemory
 
 # Initialize LLM (uses GEMINI_API_KEY env var when api_key is None)
-llm = GeminiLLM(model="gemini-2.5-flash", api_key=None, max_tokens=4096)
+llm = GeminiLLM(model="gemini-3-flash-preview", api_key=None, max_tokens=4096)
 
 # Initialize memory with a summarizer LLM (required for compression)
-summarizer_llm = GeminiLLM(model="gemini-2.0-flash", api_key=None, max_tokens=2048)
+summarizer_llm = GeminiLLM(model="gemini-3-flash-preview", api_key=None, max_tokens=2048)
 memory = FullCompressionMemory(summarizer_llm=summarizer_llm, max_tokens=50000)
 
 # Create agent
