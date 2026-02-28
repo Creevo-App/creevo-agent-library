@@ -17,33 +17,30 @@ pip install "creevo-agent-library[mcp]"
 ## Quick Start
 
 ```python
+import os
 from CAL import Agent, GeminiLLM, StopTool, FullCompressionMemory
-from CAL.logger import MaximLogger
 
-# Initialize LLM
-llm = GeminiLLM(model='gemini-3-pro-preview', api_key=None, max_tokens=4096)
+# Initialize LLM (uses GEMINI_API_KEY env var when api_key is None)
+llm = GeminiLLM(model="gemini-2.5-flash", api_key=None, max_tokens=4096)
 
 # Initialize memory with a summarizer LLM (required for compression)
-summarizer_llm = GeminiLLM(model='gemini-3-flash-preview', api_key=None, max_tokens=2048)
+summarizer_llm = GeminiLLM(model="gemini-2.0-flash", api_key=None, max_tokens=2048)
 memory = FullCompressionMemory(summarizer_llm=summarizer_llm, max_tokens=50000)
-
-# Initialize logger
-logger = MaximLogger(agent_name="my-session")
 
 # Create agent
 agent = Agent(
     llm=llm,
     system_prompt="You are a helpful assistant.",
-    max_calls=250,
+    max_calls=10,
     max_tokens=4096,
     memory=memory,
-    agent_name="my-session",
-    logger=logger,
+    agent_name="my-agent",
     tools=[StopTool()]
 )
 
 # Run agent
 result = agent.run("Hello, how can you help me?")
+print(result.content)
 ```
 
 ## Architecture
@@ -127,7 +124,7 @@ See [`examples/mcp_context7_agent.ipynb`](examples/mcp_context7_agent.ipynb) for
 
 ## Documentation
 
-For detailed API documentation, see the source code or contact the Creevo team.
+For detailed API documentation, see the [wiki](https://github.com/Creevo-App/creevo-agent-library/wiki).
 
 ## License
 
