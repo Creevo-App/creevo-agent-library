@@ -38,8 +38,6 @@ from dotenv import load_dotenv
 
 # CAL library imports
 from CAL import Agent, GeminiLLM, StopTool, FullCompressionMemory
-from CAL.content_blocks import TextBlock
-from CAL.message import MessageRole
 
 # Local imports (our custom prompt and tools)
 # This handles both running as a module and directly
@@ -135,39 +133,6 @@ async def create_research_agent() -> Agent:
 
 
 # =============================================================================
-# RESPONSE EXTRACTION
-# Helper function to get the agent's final text response
-# =============================================================================
-
-def extract_final_response(agent: Agent) -> str:
-    """
-    Extract the final text response from the agent's conversation history.
-    
-    The agent's conversation is stored as a list of messages.
-    This function finds the last assistant message and extracts its text.
-    
-    Args:
-        agent: The agent after running
-    
-    Returns:
-        The final text response from the agent
-    """
-    text_parts = []
-    
-    # Look through all messages in the conversation
-    for msg in agent.conversation_history:
-        # Only look at assistant messages (not user or tool results)
-        if msg.role == MessageRole.ASSISTANT and isinstance(msg.content, list):
-            for block in msg.content:
-                # Extract text from TextBlocks
-                if isinstance(block, TextBlock) and block.text.strip():
-                    text_parts.append(block.text)
-    
-    # Return the last text part (most recent response)
-    return text_parts[-1] if text_parts else ""
-
-
-# =============================================================================
 # INTERACTIVE MODE
 # Run the agent in a loop, accepting user input
 # =============================================================================
@@ -232,7 +197,7 @@ async def run_interactive():
         await agent.run_async(user_input)
         
         # Extract and display the response
-        final_response = extract_final_response(agent)
+        final_response = agent.get_final_response()
         if final_response:
             print(f"\nResearch Partner: {final_response}")
     
@@ -265,7 +230,7 @@ async def run_single_query(query: str):
     await agent.run_async(query)
     
     # Display the response
-    final_response = extract_final_response(agent)
+    final_response = agent.get_final_response()
     if final_response:
         print(f"\n{final_response}")
 

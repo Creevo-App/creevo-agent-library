@@ -95,6 +95,35 @@ class Agent:
         """Expose current conversation history."""
         return self.memory.get_history()
     
+    def get_final_response(self) -> str:
+        """
+        Extract the final response from the agent's last run.
+        
+        Looks for the stop tool's final_answer input, or falls back to
+        scanning conversation history for the last assistant text.
+        
+        Returns:
+            The final response string, or empty string if none found.
+        """
+
+        conversation_history = self.conversation_history
+        
+        # First, look for stop tool call with final_answer
+        for msg in reversed(conversation_history):
+            if msg.role == MessageRole.ASSISTANT and isinstance(msg.content, list):
+                for block in msg.content:
+                    if isinstance(block, ToolUseBlock) and block.name == "stop":
+                        if "final_answer" in block.input:
+                            return block.input["final_answer"]
+        
+        # Fallback: find last assistant TextBlock
+        for msg in reversed(conversation_history):
+            if msg.role == MessageRole.ASSISTANT and isinstance(msg.content, list):
+                for block in reversed(msg.content):
+                    if isinstance(block, TextBlock) and block.text.strip():
+                        return block.text
+        
+        return ""
     
     def _history_json(self) -> str:
         """Return the serialized conversation history."""

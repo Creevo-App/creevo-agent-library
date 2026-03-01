@@ -429,3 +429,120 @@ async def test_push_context_stale_cleared_between_runs():
         if isinstance(block, TextBlock)
     ]
     assert "stale from previous run" not in texts
+
+
+# --- get_final_response tests ---
+
+
+@pytest.mark.asyncio
+async def test_get_final_response_extracts_stop_tool_final_answer():
+    """get_final_response extracts final_answer from stop tool call."""
+    stop_tool = StopTool()
+    stop_message = Message(
+        role=MessageRole.ASSISTANT,
+        content=[ToolUseBlock(id="stop-1", name="stop", input={"final_answer": "The weather in NYC is sunny."})],
+    )
+    llm = QueueLLM([stop_message])
+    memory = FullCompressionMemory(summarizer_llm=llm)
+    agent = Agent(
+        llm=llm,
+        system_prompt="system",
+        max_calls=2,
+        max_tokens=10,
+        memory=memory,
+        agent_name="session",
+        tools=[stop_tool],
+    )
+
+    await agent.run_async("What's the weather?")
+
+    response = agent.get_final_response()
+    assert response == "The weather in NYC is sunny."
+
+
+@pytest.mark.asyncio
+async def test_get_final_response_falls_back_to_text_block():
+    """get_final_response falls back to last TextBlock when no final_answer."""
+    stop_tool = StopTool()
+    # Message with text and stop tool call without final_answer
+    stop_message = Message(
+        role=MessageRole.ASSISTANT,
+        content=[
+            TextBlock(text="Here is my analysis of the weather."),
+            ToolUseBlock(id="stop-1", name="stop", input={}),
+        ],
+    )
+    llm = QueueLLM([stop_message])
+    memory = FullCompressionMemory(summarizer_llm=llm)
+    agent = Agent(
+        llm=llm,
+        system_prompt="system",
+        max_calls=2,
+        max_tokens=10,
+        memory=memory,
+        agent_name="session",
+        tools=[stop_tool],
+    )
+
+    await agent.run_async("What's the weather?")
+
+    response = agent.get_final_response()
+    assert response == "Here is my analysis of the weather."
+
+
+@pytest.mark.asyncio
+async def test_get_final_response_returns_empty_when_no_response():
+    """get_final_response returns empty string when no response found."""
+    llm = QueueLLM([make_text_message(MessageRole.ASSISTANT, "")])
+    memory = FullCompressionMemory(summarizer_llm=llm)
+    agent = Agent(
+        llm=llm,
+        system_prompt="system",
+        max_calls=1,
+        max_tokens=10,
+        memory=memory,
+        agent_name="session",
+        tools=[],
+    )
+
+    # Empty conversation - no run yet
+    response = agent.get_final_response()
+    assert response == ""
+
+
+@pytest.mark.asyncio
+async def test_get_final_response_finds_text_from_earlier_message():
+    """get_final_response finds text from earlier assistant message if last has no text."""
+    stop_tool = StopTool()
+    tool = FakeTool("my_tool")
+    
+    # First message has text and tool call
+    first_message = Message(
+        role=MessageRole.ASSISTANT,
+        content=[
+            TextBlock(text="Let me check that for you."),
+            ToolUseBlock(id="t1", name="my_tool", input={"text": "query"}),
+        ],
+    )
+    # Second message just has stop with final_answer
+    stop_message = Message(
+        role=MessageRole.ASSISTANT,
+        content=[ToolUseBlock(id="stop-1", name="stop", input={"final_answer": "The result is 42."})],
+    )
+    llm = QueueLLM([first_message, stop_message])
+    memory = FullCompressionMemory(summarizer_llm=llm)
+    agent = Agent(
+        llm=llm,
+        system_prompt="system",
+        max_calls=3,
+        max_tokens=10,
+        memory=memory,
+        agent_name="session",
+        tools=[tool, stop_tool],
+    )
+
+    await agent.run_async("What is the answer?")
+
+    # Should get the final_answer from stop tool, not the earlier text
+    response = agent.get_final_response()
+    assert response == "The result is 42."
