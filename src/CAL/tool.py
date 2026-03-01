@@ -208,6 +208,9 @@ class StopTool(Tool):
             ToolResultBlock with the final_answer as content
         """
         final_answer = kwargs.get("final_answer", "")
+        if final_answer is None:
+            final_answer = ""
+            
         return ToolResultBlock(
             tool_use_id=kwargs.pop('tool_use_id', 'stub_tool_use_id'),
             content=final_answer,
