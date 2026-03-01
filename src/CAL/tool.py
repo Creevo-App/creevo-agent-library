@@ -182,28 +182,35 @@ def tool(func: Callable = None, *, is_read_tool: bool = False) -> Tool:
 
 
 class StopTool(Tool):
-    """Special tool that signals the agent to stop"""
+    """Special tool that signals the agent to stop and provide final answer"""
     
     def __init__(self):
         """Initialize the stop tool"""
-        def stop_function():
-            """Stop the agent execution"""
-            return "STOP"
+        def stop_function(final_answer: str):
+            """Stop the agent and provide the final response to the user's query.
+            The final_answer should be a complete, well-formatted response that directly
+            addresses what the user asked for."""
+            return final_answer
         
         super().__init__(stop_function)
         self.name = "stop"
-        self.description = "Stop the agent execution"
+        self.description = (
+            "Stop the agent execution and provide your final response. "
+            "Use this when you have completed the user's request. "
+            "The final_answer must be a complete response to the user's original query."
+        )
     
     async def execute(self, **kwargs) -> ToolResultBlock:
         """
         Execute the stop tool.
         
         Returns:
-            "STOP" string
+            ToolResultBlock with the final_answer as content
         """
+        final_answer = kwargs.get("final_answer", "")
         return ToolResultBlock(
             tool_use_id=kwargs.pop('tool_use_id', 'stub_tool_use_id'),
-            content="STOP",
+            content=final_answer,
             is_error=False,
             name=self.name
         )

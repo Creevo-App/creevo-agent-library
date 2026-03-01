@@ -22,8 +22,6 @@ import sys
 from dotenv import load_dotenv
 
 from CAL import Agent, GeminiLLM, StopTool, FullCompressionMemory
-from CAL.content_blocks import TextBlock
-from CAL.message import MessageRole
 
 if __name__ == "__main__" and __package__ is None:
     from prompt import SYSTEM_PROMPT
@@ -79,18 +77,6 @@ async def create_weather_agent() -> Agent:
     return agent
 
 
-def extract_final_response(agent: Agent) -> str:
-    """Extract the final text response from the agent's conversation history."""
-    text_parts = []
-    for msg in agent.conversation_history:
-        if msg.role == MessageRole.ASSISTANT and isinstance(msg.content, list):
-            for block in msg.content:
-                if isinstance(block, TextBlock) and block.text.strip():
-                    text_parts.append(block.text)
-    
-    return text_parts[-1] if text_parts else ""
-
-
 async def run_interactive():
     """Run the weather agent in interactive mode."""
     
@@ -129,7 +115,7 @@ async def run_interactive():
         print("\nChecking weather...")
         await agent.run_async(user_input)
         
-        final_response = extract_final_response(agent)
+        final_response = agent.get_final_response()
         if final_response:
             print(f"\nWeather Agent: {final_response}")
     
@@ -145,7 +131,7 @@ async def run_single_query(query: str):
     agent = await create_weather_agent()
     await agent.run_async(query)
     
-    final_response = extract_final_response(agent)
+    final_response = agent.get_final_response()
     if final_response:
         print(f"\n{final_response}")
 

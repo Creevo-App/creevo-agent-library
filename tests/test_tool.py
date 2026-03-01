@@ -73,11 +73,40 @@ async def test_stop_tool_schema_and_execution():
 
     schema = tool_instance.get_schema()
     gemini_tool = tool_instance.gemini_input_form()
-    result = await tool_instance.execute(tool_use_id="tool-use-stop")
+    result = await tool_instance.execute(
+        tool_use_id="tool-use-stop",
+        final_answer="The answer to your question is 42."
+    )
 
     assert tool_instance.name == "stop"
     assert schema["name"] == "stop"
-    assert schema["input_schema"]["properties"] == {}
+    # Schema should have final_answer parameter
+    assert "final_answer" in schema["input_schema"]["properties"]
+    assert schema["input_schema"]["properties"]["final_answer"]["type"] == "string"
+    assert "final_answer" in schema["input_schema"]["required"]
+    # Description should guide LLM to provide final response
+    assert "final response" in schema["description"].lower() or "final_answer" in schema["description"].lower()
     assert gemini_tool.function_declarations[0].name == "stop"
-    assert result.content == "STOP"
+    # Result should contain the final_answer
+    assert result.content == "The answer to your question is 42."
+    assert result.is_error is False
+
+
+@pytest.mark.asyncio
+async def test_stop_tool_empty_final_answer():
+    """Stop tool should handle empty final_answer gracefully."""
+    tool_instance = StopTool()
+    result = await tool_instance.execute(tool_use_id="tool-use-stop", final_answer="")
+    
+    assert result.content == ""
+    assert result.is_error is False
+
+
+@pytest.mark.asyncio
+async def test_stop_tool_missing_final_answer():
+    """Stop tool should handle missing final_answer with empty string."""
+    tool_instance = StopTool()
+    result = await tool_instance.execute(tool_use_id="tool-use-stop")
+    
+    assert result.content == ""
     assert result.is_error is False
