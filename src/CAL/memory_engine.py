@@ -755,16 +755,42 @@ class RedactionProcessor:
         re.compile(r"(AKIA[0-9A-Z]{16})"),
     ]
 
-    def process(self, turn: TurnRecord) -> TurnRecord:
-        text = _message_to_text(turn.message)
-        redacted = text
+    def _redact_text(self, text: str) -> str:
+        """Apply all secret patterns to a string, returning the redacted result."""
+        result = text
         for pattern in self._patterns:
-            redacted = pattern.sub("[REDACTED_SECRET]", redacted)
+            result = pattern.sub("[REDACTED_SECRET]", result)
+        return result
 
-        if redacted == text:
+    def process(self, turn: TurnRecord) -> TurnRecord:
+        content = turn.message.content
+        changed = False
+
+        if isinstance(content, str):
+            redacted = self._redact_text(content)
+            if redacted == content:
+                return turn
+            new_content = redacted
+            changed = True
+        else:
+            new_blocks = []
+            for block in content:
+                if isinstance(block, TextBlock):
+                    redacted = self._redact_text(block.text)
+                    if redacted != block.text:
+                        new_blocks.append(TextBlock(text=redacted))
+                        changed = True
+                    else:
+                        new_blocks.append(block)
+                else:
+                    # Preserve ToolUseBlock, ToolResultBlock, and other block types as-is
+                    new_blocks.append(block)
+            new_content = new_blocks
+
+        if not changed:
             return turn
 
-        new_message = Message(role=turn.message.role, content=[TextBlock(text=redacted)], usage=dict(turn.message.usage), metadata=dict(turn.message.metadata))
+        new_message = Message(role=turn.message.role, content=new_content, usage=dict(turn.message.usage), metadata=dict(turn.message.metadata))
         return TurnRecord(
             run_id=turn.run_id,
             turn_id=turn.turn_id,
@@ -1402,7 +1428,9 @@ class DefaultMemoryEngine:
         if len(turns) <= self.archive_cold_threshold:
             return
 
-        candidate_turns = [t for t in turns[:-self.archive_keep_recent] if t.turn_id not in self._archived_turn_ids]
+        with self._lock:
+            archived_snapshot = set(self._archived_turn_ids)
+        candidate_turns = [t for t in turns[:-self.archive_keep_recent] if t.turn_id not in archived_snapshot]
         if len(candidate_turns) < max(4, self.archive_cold_threshold // 3):
             return
 
@@ -1452,8 +1480,9 @@ class DefaultMemoryEngine:
             except Exception as exc:
                 self._inc_health(last_error=f"archiver: {exc}")
 
-        for turn in candidate_turns:
-            self._archived_turn_ids.add(turn.turn_id)
+        with self._lock:
+            for turn in candidate_turns:
+                self._archived_turn_ids.add(turn.turn_id)
 
         ratio = summary_message_tokens / max(1, tokens_before)
         fidelity = max(0.0, min(1.0, 1.0 - ratio))

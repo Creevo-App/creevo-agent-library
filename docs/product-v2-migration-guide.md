@@ -97,7 +97,7 @@ The v2 engine auto-creates when not passed. For session continuity, you need to 
 + # Migrate existing legacy sessions into the v2 engine
 + if conversation_state:
 +     memory_payload = conversation_state.get('memory', conversation_state)
-+     await migrate_legacy_memory_payload(engine, memory_payload, thread_id=session_id)
++     await migrate_legacy_memory_payload(memory_payload, engine, thread_id=session_id, resource_id=session_id)
 ```
 
 #### 3c. Update Agent constructor
@@ -178,7 +178,7 @@ This would be a follow-up PR to the CAL library itself, adding first-class seria
 
 Same pattern as the game agent. Additional notes:
 
-- **SubAgentTool simplification:** The v2 engine handles thread isolation automatically. The `make_exploration_tool()` in `common_tools.py` no longer needs `memory.clone()` — just pass tools and the parent agent handles it.
+- **SubAgentTool simplification:** SubAgentTool shares the parent's memory engine but uses a separate `thread_id` per invocation for isolation. The `make_exploration_tool()` in `common_tools.py` no longer needs `memory.clone()` — just pass tools and the parent agent handles it.
 - **File-based history:** The `CONVERSATION_HISTORY_FILE` approach needs the same migration treatment. Read the file, parse as legacy format, call `migrate_legacy_memory_payload()`.
 - **Thinking level:** Already supported — `GeminiLLM(thinking_level=...)` works unchanged.
 
@@ -207,14 +207,14 @@ if conversation_state:
     else:
         # Legacy format — migrate
         engine = DefaultMemoryEngine(context_policy=ContextPolicy(total_token_budget=max_tokens))
-        await migrate_legacy_memory_payload(engine, memory_payload, thread_id=session_id)
+        await migrate_legacy_memory_payload(memory_payload, engine, thread_id=session_id, resource_id=session_id)
 ```
 
 ## What Simplifies
 
 - **No more `memory.clone()`** — SubAgentTool shares the parent engine with isolated thread IDs
-- **No more `sync_token_count_from_llm_usage()`** — v2 engine handles context budgeting internally
-- **No more `_cleanup_incomplete_conversation()`** — v2 turn recording is atomic
+- **No more `sync_token_count_from_llm_usage()`** — `ContextPolicy` defines token budgets applied during `build_context()` assembly
+- **No more `_cleanup_incomplete_conversation()`** — v2 turn recording uses structured error handling with automatic health tracking
 - **Automatic context assembly** — `ContextPolicy` handles token budgets, truncation ordering, and degraded mode fallback
 
 ## Estimated Effort

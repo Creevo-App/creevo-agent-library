@@ -10,7 +10,7 @@ from .agent import Agent
 from .tool import Tool
 from .content_blocks import ToolResultBlock, TextBlock
 from .llm import LLM
-from .memory_engine import ContextPolicy
+from .memory_engine import ContextPolicy, TurnRecord
 
 
 class SubAgentTool(Tool):
@@ -117,6 +117,22 @@ class SubAgentTool(Tool):
             tools=list(self.sub_tools),
             logger=child_logger,
         )
+
+        # Seed the child thread with the parent's recent conversation history
+        # so the sub-agent has context about what the parent has been doing.
+        parent_turns = await self._parent_agent.memory_engine.conversation_store.all(
+            self._parent_agent.thread_id
+        )
+        for turn in parent_turns:
+            seeded_turn = TurnRecord(
+                run_id=turn.run_id,
+                turn_id=f"{invocation_thread_id}:seed:{turn.turn_id}",
+                thread_id=invocation_thread_id,
+                resource_id=turn.resource_id,
+                message=turn.message,
+                metadata={**turn.metadata, "seeded_from": self._parent_agent.thread_id},
+            )
+            await self._parent_agent.memory_engine.conversation_store.append(seeded_turn)
 
         # Run the sub-agent
         try:

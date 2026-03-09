@@ -108,6 +108,9 @@ class Agent:
     def register_tool(self, tool: Tool):
         """Register a tool with the agent."""
         self.tools.append(tool)
+        from .subagent import SubAgentTool
+        if isinstance(tool, SubAgentTool):
+            tool.bind_parent(self)
 
     @property
     def conversation_history(self) -> List[Message]:

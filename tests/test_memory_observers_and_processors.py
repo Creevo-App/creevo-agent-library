@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from CAL.content_blocks import TextBlock
+from CAL.content_blocks import TextBlock, ToolResultBlock, ToolUseBlock
 from CAL.memory_engine import (
     ClickHouseMemoryObserver,
     CompositeMemoryObserver,
@@ -281,6 +281,94 @@ class TestRedactionProcessor:
         result = proc.process(turn)
         text = result.message.content[0].text
         assert text.count("[REDACTED_SECRET]") == 2
+
+    def test_preserves_tool_blocks_while_redacting_text_blocks(self):
+        """RedactionProcessor must preserve ToolUseBlock/ToolResultBlock
+        structure and only redact secrets inside TextBlock instances."""
+        proc = RedactionProcessor()
+        tool_use = ToolUseBlock(id="tu_1", name="get_key", input={"scope": "all"})
+        tool_result = ToolResultBlock(
+            tool_use_id="tu_1",
+            content="tool output here",
+        )
+        turn = TurnRecord(
+            run_id="r1",
+            turn_id="t1",
+            thread_id="thread-1",
+            resource_id="resource-1",
+            message=Message(
+                role=MessageRole.ASSISTANT,
+                content=[
+                    TextBlock(text="Here is the key: sk-abc1234567890ABCDEF"),
+                    tool_use,
+                    tool_result,
+                    TextBlock(text="And another key: AKIAIOSFODNN7EXAMPLE"),
+                ],
+            ),
+        )
+        result = proc.process(turn)
+
+        blocks = result.message.content
+        assert len(blocks) == 4
+
+        # First block: TextBlock with redacted secret
+        assert isinstance(blocks[0], TextBlock)
+        assert "[REDACTED_SECRET]" in blocks[0].text
+        assert "sk-abc" not in blocks[0].text
+
+        # Second block: ToolUseBlock preserved as-is
+        assert isinstance(blocks[1], ToolUseBlock)
+        assert blocks[1] is tool_use
+        assert blocks[1].name == "get_key"
+
+        # Third block: ToolResultBlock preserved as-is
+        assert isinstance(blocks[2], ToolResultBlock)
+        assert blocks[2] is tool_result
+        assert blocks[2].tool_use_id == "tu_1"
+
+        # Fourth block: TextBlock with redacted secret
+        assert isinstance(blocks[3], TextBlock)
+        assert "[REDACTED_SECRET]" in blocks[3].text
+        assert "AKIA" not in blocks[3].text
+
+    def test_no_redaction_with_tool_blocks_returns_same_turn(self):
+        """When no secrets are present, the original turn is returned even
+        if the message contains ToolUseBlock/ToolResultBlock."""
+        proc = RedactionProcessor()
+        turn = TurnRecord(
+            run_id="r1",
+            turn_id="t1",
+            thread_id="thread-1",
+            resource_id="resource-1",
+            message=Message(
+                role=MessageRole.ASSISTANT,
+                content=[
+                    TextBlock(text="No secrets here"),
+                    ToolUseBlock(id="tu_1", name="search", input={"q": "test"}),
+                    ToolResultBlock(tool_use_id="tu_1", content="result"),
+                ],
+            ),
+        )
+        result = proc.process(turn)
+        assert result is turn  # identity — no copy needed
+
+    def test_redacts_string_content(self):
+        """RedactionProcessor handles plain string content."""
+        proc = RedactionProcessor()
+        turn = TurnRecord(
+            run_id="r1",
+            turn_id="t1",
+            thread_id="thread-1",
+            resource_id="resource-1",
+            message=Message(
+                role=MessageRole.USER,
+                content="My key is sk-abc1234567890ABCDEF",
+            ),
+        )
+        result = proc.process(turn)
+        assert isinstance(result.message.content, str)
+        assert "[REDACTED_SECRET]" in result.message.content
+        assert "sk-abc" not in result.message.content
 
 
 # ===========================================================================
