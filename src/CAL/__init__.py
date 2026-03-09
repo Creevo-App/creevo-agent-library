@@ -40,7 +40,6 @@ from .memory_engine import (
     estimate_system_tokens,
     estimate_tool_schema_tokens,
 )
-from .migrations import migrate_legacy_memory_json, migrate_legacy_memory_payload
 from .compression import CompressionConfig, CompressionArchiver
 from .content_blocks import (
     ContentBlock,
@@ -101,8 +100,6 @@ __all__ = [
     'InMemoryArchiveStore',
     'estimate_system_tokens',
     'estimate_tool_schema_tokens',
-    'migrate_legacy_memory_json',
-    'migrate_legacy_memory_payload',
     'CompressionConfig',
     'CompressionArchiver',
 ]
