@@ -130,9 +130,13 @@ The v2 engine auto-creates when not passed. For session continuity, you need to 
 Add a serialization helper that exports turns from the engine's store:
 
 ```python
-def _serialize_engine_state(engine, thread_id):
-    """Export v2 engine state for session persistence."""
-    turns = engine._conversation_store._threads.get(thread_id, [])
+async def _serialize_engine_state(engine, thread_id):
+    """Export v2 engine state for session persistence.
+
+    NOTE: This accesses the public conversation_store API.
+    Consider using Option B (first-class serialization) for production.
+    """
+    turns = await engine.conversation_store.all(thread_id)
     return {
         "version": "v2",
         "thread_id": thread_id,
@@ -167,7 +171,7 @@ This would be a follow-up PR to the CAL library itself, adding first-class seria
       payload = {
           "session_id": session_id,
 -         "memory": memory.to_dict(),
-+         "memory": _serialize_engine_state(memory, session_id),
++         "memory": await _serialize_engine_state(memory, session_id),
       }
       print(f"{SESSION_STATE_PREFIX}{json.dumps(payload)}", flush=True)
 ```

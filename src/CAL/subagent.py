@@ -8,7 +8,7 @@ from google.genai import types
 
 from .agent import Agent
 from .tool import Tool
-from .content_blocks import ToolResultBlock, TextBlock
+from .content_blocks import ToolResultBlock, ToolUseBlock, TextBlock
 from .llm import LLM
 from .memory_engine import ContextPolicy, TurnRecord
 
@@ -127,6 +127,14 @@ class SubAgentTool(Tool):
         )
         max_seed_turns = max(4, getattr(self._parent_agent.memory_engine, 'archive_cold_threshold', 60) // 2)
         parent_turns = parent_turns[-max_seed_turns:]
+        # Drop trailing assistant turn with tool calls — the parent hasn't
+        # recorded the ToolResultBlock yet so seeding it would give the
+        # child an incomplete tool-call sequence.
+        while parent_turns and any(
+            isinstance(b, ToolUseBlock)
+            for b in (parent_turns[-1].message.content if isinstance(parent_turns[-1].message.content, list) else [])
+        ):
+            parent_turns = parent_turns[:-1]
         for turn in parent_turns:
             seeded_turn = TurnRecord(
                 run_id=turn.run_id,

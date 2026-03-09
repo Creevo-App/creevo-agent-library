@@ -1032,9 +1032,9 @@ class DefaultMemoryEngine:
                     continue
                 filtered.append(item)
 
-            limited = filtered[: max(0, query.total_limit)]
             for processor in self.post_recall_processors:
-                limited = processor.process_items(limited)
+                filtered = processor.process_items(filtered)
+            limited = filtered[: max(0, query.total_limit)]
 
             latency_ms = (time.perf_counter() - started) * 1000.0
             self._inc_health(
