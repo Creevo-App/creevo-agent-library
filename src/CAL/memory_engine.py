@@ -1186,6 +1186,9 @@ class DefaultMemoryEngine:
                 selected_recent.append((turn, msg_tokens))
                 recent_tokens += msg_tokens
             else:
+                # Stop here to keep recent history contiguous.  Skipping a
+                # large turn while keeping older ones could create gaps
+                # (e.g. tool result dropped but its tool call kept).
                 ledger_records.append(
                     ContextLedgerRecord(
                         source_type=ContextSourceType.RECENT,
@@ -1199,6 +1202,7 @@ class DefaultMemoryEngine:
                         dropped_reason="segment_budget",
                     )
                 )
+                break
         selected_recent.reverse()
 
         for idx, (turn, msg_tokens) in enumerate(selected_recent):

@@ -1,116 +1,163 @@
 """
-Weather Agent Example
+Weather Agent
 
-A CAL agent that provides weather information using the Open-Meteo API.
-No API key required - Open-Meteo is a free, open-source weather service.
+A CAL agent that reports current weather conditions for any city
+using the free Open-Meteo API (no API key required).
 
-Features:
-- Location search by city name
-- Current weather conditions
-- Multi-day forecasts (up to 16 days)
-- Hourly forecasts (up to 48 hours)
-- Multi-location comparison
-
-This example showcases:
-- Custom tools calling external APIs
-- DefaultMemoryEngine with ContextPolicy
-- Practical conversational weather assistant
+Prerequisites:
+    1. Install CAL: pip install git+https://github.com/Creevo-App/creevo-agent-library.git
+    2. Set GEMINI_API_KEY in .env or environment
 
 Usage:
-    python agent.py
-
-Requirements:
-    - GEMINI_API_KEY in .env file
-    - No weather API key needed (Open-Meteo is free)
+    python -m examples.weather_agent.agent "What's the weather in Tokyo?"
+    
+    Or interactively:
+    python -m examples.weather_agent.agent
 """
 
+import asyncio
 import os
-from CAL import (
-    Agent,
-    GeminiLLM,
-    StopTool,
-    DefaultMemoryEngine,
-    ContextPolicy,
-)
+import sys
+
 from dotenv import load_dotenv
-from tools import (
-    search_location,
-    get_current_weather,
-    get_weather_forecast,
-    get_hourly_forecast,
-    compare_weather,
-)
-from prompt import SYSTEM_PROMPT
+
+from CAL import Agent, GeminiLLM, StopTool, FullCompressionMemory
+from CAL.content_blocks import TextBlock
+from CAL.message import MessageRole
+
+if __name__ == "__main__" and __package__ is None:
+    from prompt import SYSTEM_PROMPT
+    from tools import geocode_city, get_current_weather
+else:
+    from .prompt import SYSTEM_PROMPT
+    from .tools import geocode_city, get_current_weather
 
 load_dotenv()
 
-llm = GeminiLLM(
-    model='gemini-3-flash-preview',
-    api_key=os.getenv("GEMINI_API_KEY"),
-    max_tokens=4096
-)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-memory_engine = DefaultMemoryEngine()
 
-context_policy = ContextPolicy(
-    total_token_budget=30000,
-    recent_tokens=12000,
-    semantic_tokens=8000,
-    working_tokens=3000,
-)
-
-agent = Agent(
-    llm=llm,
-    system_prompt=SYSTEM_PROMPT,
-    max_calls=30,
-    max_tokens=4096,
-    memory_engine=memory_engine,
-    context_policy=context_policy,
-    thread_id="weather-thread",
-    resource_id="weather-user",
-    agent_name="weather-assistant",
-    tools=[
+async def create_weather_agent() -> Agent:
+    """Create and configure the weather agent."""
+    
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY not set. Please set it in .env or environment.")
+    
+    llm = GeminiLLM(
+        model="gemini-2.0-flash",
+        api_key=GEMINI_API_KEY,
+        max_tokens=4096,
+    )
+    
+    summarizer_llm = GeminiLLM(
+        model="gemini-2.0-flash",
+        api_key=GEMINI_API_KEY,
+        max_tokens=2048,
+    )
+    
+    memory = FullCompressionMemory(
+        summarizer_llm=summarizer_llm,
+        max_tokens=50_000,
+    )
+    
+    tools = [
         StopTool(),
-        search_location,
+        geocode_city,
         get_current_weather,
-        get_weather_forecast,
-        get_hourly_forecast,
-        compare_weather,
     ]
-)
+    
+    agent = Agent(
+        llm=llm,
+        system_prompt=SYSTEM_PROMPT,
+        max_calls=10,
+        max_tokens=4096,
+        memory=memory,
+        agent_name="weather-agent",
+        tools=tools,
+    )
+    
+    return agent
 
 
-def main():
+def extract_final_response(agent: Agent) -> str:
+    """Extract the final text response from the agent's conversation history."""
+    text_parts = []
+    for msg in agent.conversation_history:
+        if msg.role == MessageRole.ASSISTANT and isinstance(msg.content, list):
+            for block in msg.content:
+                if isinstance(block, TextBlock) and block.text.strip():
+                    text_parts.append(block.text)
+    
+    return text_parts[-1] if text_parts else ""
+
+
+async def run_interactive():
+    """Run the weather agent in interactive mode."""
+    
+    print("\n" + "=" * 60)
+    print("  Weather Agent")
     print("=" * 60)
-    print("Weather Assistant")
-    print("=" * 60)
-    print("\nAsk me about the weather anywhere in the world!")
+    print("\nInitializing...")
+    
+    agent = await create_weather_agent()
+    
+    print(f"\nAgent ready with {len(agent.tools)} tools:")
+    for t in agent.tools:
+        print(f"  - {t.name}")
+    
+    print("\n" + "-" * 60)
+    print("Ask about the weather in any city!")
     print("Examples:")
-    print("  - What's the weather in Tokyo?")
-    print("  - Will it rain in London tomorrow?")
-    print("  - Compare weather in New York and Los Angeles")
-    print("  - 7-day forecast for Sydney, Australia")
-    print("\nType 'quit' to exit.\n")
+    print("  - What's the weather in Paris?")
+    print("  - How's the weather in Tokyo, Japan?")
+    print("  - Is it raining in London?")
+    print("\nType 'quit' or 'exit' to end the session.")
+    print("-" * 60 + "\n")
     
     while True:
         try:
-            user_input = input("You: ").strip()
-            
-            if user_input.lower() in ['quit', 'exit', 'q']:
-                print("\nGoodbye! Stay weather-aware! 🌤️")
-                break
-            
-            if not user_input:
-                continue
-            
-            result = agent.run(user_input)
-            print(f"\nAssistant: {result}\n")
-            
-        except KeyboardInterrupt:
-            print("\n\nGoodbye! Stay weather-aware! 🌤️")
+            user_input = input("\nYou: ").strip()
+        except EOFError:
             break
-        except Exception as e:
-            print(f"\nError: {e}\n")
+        
+        if not user_input:
+            continue
+        
+        if user_input.lower() in ("quit", "exit"):
+            break
+        
+        print("\nChecking weather...")
+        await agent.run_async(user_input)
+        
+        final_response = extract_final_response(agent)
+        if final_response:
+            print(f"\nWeather Agent: {final_response}")
+    
+    print("\nGoodbye!")
+
+
+async def run_single_query(query: str):
+    """Run a single weather query and exit."""
+    
+    print(f"\nQuery: {query}")
+    print("-" * 60)
+    
+    agent = await create_weather_agent()
+    await agent.run_async(query)
+    
+    final_response = extract_final_response(agent)
+    if final_response:
+        print(f"\n{final_response}")
+
+
+def main():
+    """Main entry point."""
+    
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:])
+        asyncio.run(run_single_query(query))
+    else:
+        asyncio.run(run_interactive())
 
 
 if __name__ == "__main__":

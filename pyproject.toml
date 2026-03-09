@@ -5,22 +5,23 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "creevo-agent-library"
 version = "0.1.0"
-description = "CAL (Creevo Agent Library) - A library for managing agents, LLMs, and tools"
+description = "CAL (Creevo Agent Library) - A Python library for building agentic AI applications with LLM abstraction, tool management, and conversation memory"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "Creevo", email = "info@creevo.app" }]
+keywords = ["ai", "agents", "llm", "gemini", "tools", "mcp", "agentic"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-
 dependencies = [
     "google-genai>=0.2.0",
     "anthropic[vertex]>=0.52.0",
@@ -28,11 +29,19 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
     "maxim-py>=3.13.1",
     "python-dotenv>=1.0.0",
+    "httpx>=0.27.0",
+    "beautifulsoup4>=4.12.0",
+    "duckduckgo-search>=8.0.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=9.0.2", "pytest-asyncio>=1.3.0"]
 mcp = ["mcp>=1.0.0"]
+
+[project.urls]
+Homepage = "https://github.com/Creevo-App/creevo-agent-library"
+Repository = "https://github.com/Creevo-App/creevo-agent-library"
+Issues = "https://github.com/Creevo-App/creevo-agent-library/issues"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

@@ -8,16 +8,17 @@ A practical example demonstrating how to build a CAL agent that can:
 
 This example showcases:
 - Custom tool creation with the @tool decorator
-- Memory management with DefaultMemoryEngine and ContextPolicy
+- Memory management with FullCompressionMemory
 - Structured system prompts
 - Tool return format patterns
 
+Prerequisites:
+    1. Install CAL: pip install git+https://github.com/Creevo-App/creevo-agent-library.git
+    2. Set GEMINI_API_KEY in .env file
+    3. Set TAVILY_API in .env file (for web search)
+
 Usage:
     python agent.py
-
-Requirements:
-    - GEMINI_API_KEY in .env file
-    - TAVILY_API in .env file (for web search)
 """
 
 import os
@@ -25,8 +26,7 @@ from CAL import (
     Agent,
     GeminiLLM,
     StopTool,
-    DefaultMemoryEngine,
-    ContextPolicy,
+    FullCompressionMemory,
 )
 from dotenv import load_dotenv
 from tools import web_search, save_note, list_notes, read_note, generate_report
@@ -40,13 +40,15 @@ llm = GeminiLLM(
     max_tokens=4096
 )
 
-memory_engine = DefaultMemoryEngine()
+summarizer_llm = GeminiLLM(
+    model='gemini-3-flash-preview',
+    api_key=os.getenv("GEMINI_API_KEY"),
+    max_tokens=2048
+)
 
-context_policy = ContextPolicy(
-    total_token_budget=50000,
-    recent_tokens=18000,
-    semantic_tokens=12000,
-    working_tokens=5000,
+memory = FullCompressionMemory(
+    summarizer_llm=summarizer_llm,
+    max_tokens=50000,
 )
 
 agent = Agent(
@@ -54,10 +56,7 @@ agent = Agent(
     system_prompt=SYSTEM_PROMPT,
     max_calls=50,
     max_tokens=4096,
-    memory_engine=memory_engine,
-    context_policy=context_policy,
-    thread_id="research-thread",
-    resource_id="research-user",
+    memory=memory,
     agent_name="research-assistant",
     tools=[
         StopTool(),

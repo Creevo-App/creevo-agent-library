@@ -120,9 +120,13 @@ class SubAgentTool(Tool):
 
         # Seed the child thread with the parent's recent conversation history
         # so the sub-agent has context about what the parent has been doing.
+        # Limit to the most recent turns to avoid triggering expensive archival
+        # operations when the sub-agent records its first real turn.
         parent_turns = await self._parent_agent.memory_engine.conversation_store.all(
             self._parent_agent.thread_id
         )
+        max_seed_turns = max(4, getattr(self._parent_agent.memory_engine, 'archive_cold_threshold', 60) // 2)
+        parent_turns = parent_turns[-max_seed_turns:]
         for turn in parent_turns:
             seeded_turn = TurnRecord(
                 run_id=turn.run_id,

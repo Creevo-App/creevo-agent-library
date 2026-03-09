@@ -23,7 +23,7 @@ GEMINI_API_KEY=your_gemini_api_key
 2. Install dependencies:
 
 ```bash
-pip install CAL python-dotenv httpx
+pip install git+https://github.com/Creevo-App/creevo-agent-library.git python-dotenv httpx
 ```
 
 3. Run the agent:
