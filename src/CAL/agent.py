@@ -123,7 +123,7 @@ class Agent:
         payload = [
             {
                 "role": msg.role.value,
-                "content": str(msg.content),
+                "content": [b.to_dict() for b in msg.content] if isinstance(msg.content, list) else msg.content,
                 "usage": msg.usage,
                 "metadata": msg.metadata,
             }
