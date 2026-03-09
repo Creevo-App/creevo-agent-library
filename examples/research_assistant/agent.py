@@ -26,7 +26,6 @@ from CAL import (
     Agent,
     GeminiLLM,
     StopTool,
-    FullCompressionMemory,
 )
 from dotenv import load_dotenv
 from tools import web_search, save_note, list_notes, read_note, generate_report
@@ -40,23 +39,11 @@ llm = GeminiLLM(
     max_tokens=4096
 )
 
-summarizer_llm = GeminiLLM(
-    model='gemini-3-flash-preview',
-    api_key=os.getenv("GEMINI_API_KEY"),
-    max_tokens=2048
-)
-
-memory = FullCompressionMemory(
-    summarizer_llm=summarizer_llm,
-    max_tokens=50000,
-)
-
 agent = Agent(
     llm=llm,
     system_prompt=SYSTEM_PROMPT,
     max_calls=50,
     max_tokens=4096,
-    memory=memory,
     agent_name="research-assistant",
     tools=[
         StopTool(),

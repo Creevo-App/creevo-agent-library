@@ -21,7 +21,7 @@ import sys
 
 from dotenv import load_dotenv
 
-from CAL import Agent, GeminiLLM, StopTool, FullCompressionMemory
+from CAL import Agent, GeminiLLM, StopTool
 from CAL.content_blocks import TextBlock
 from CAL.message import MessageRole
 
@@ -49,29 +49,17 @@ async def create_weather_agent() -> Agent:
         max_tokens=4096,
     )
     
-    summarizer_llm = GeminiLLM(
-        model="gemini-2.0-flash",
-        api_key=GEMINI_API_KEY,
-        max_tokens=2048,
-    )
-    
-    memory = FullCompressionMemory(
-        summarizer_llm=summarizer_llm,
-        max_tokens=50_000,
-    )
-    
     tools = [
         StopTool(),
         geocode_city,
         get_current_weather,
     ]
-    
+
     agent = Agent(
         llm=llm,
         system_prompt=SYSTEM_PROMPT,
         max_calls=10,
         max_tokens=4096,
-        memory=memory,
         agent_name="weather-agent",
         tools=tools,
     )
