@@ -398,8 +398,7 @@ class LangSmithLogger(Logger):
             return
 
         try:
-            outputs = {"output": output}
-            outputs.update(metadata)
+            outputs = {"output": output, "metadata": metadata}
             self.root_run.end(outputs=outputs)
             self.root_run.patch()
         except Exception as e:
