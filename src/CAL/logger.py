@@ -2,25 +2,17 @@
 Abstract Logger interface for Maxim AI and LangSmith
 """
 
-# Abstract class imports
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 from .message import Message
 from .content_blocks import ThinkingBlock, ToolUseBlock, ToolResultBlock
 
-# LangSmith imports
 import os
 import sys
 import time
 import json
-from typing import Optional, Dict, Any
+from datetime import datetime, timezone
 from uuid import uuid4
-
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider, Span
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import Resource
 
 class Logger(ABC):
     """Abstract base class for logging implementations"""
@@ -142,220 +134,338 @@ class Logger(ABC):
         pass
 
 
+def _ns_to_datetime(ns: Optional[int]) -> Optional[datetime]:
+    """Convert nanosecond timestamp to timezone-aware datetime."""
+    if ns is None:
+        return None
+    return datetime.fromtimestamp(ns / 1e9, tz=timezone.utc)
+
+
+def _format_content(message: Message) -> tuple:
+    """Extract thinking and content parts from a message.
+
+    Returns:
+        (content_text, thinking_text) tuple
+    """
+    thinking_parts = []
+    content_parts = []
+    if isinstance(message.content, list):
+        for block in message.content:
+            if isinstance(block, ThinkingBlock):
+                thinking_parts.append(block.text)
+            elif hasattr(block, 'text'):
+                content_parts.append(block.text)
+            elif isinstance(block, ToolUseBlock):
+                content_parts.append(f"[Tool Use: {block.name}({json.dumps(block.input)})]")
+    else:
+        content_parts.append(str(message.content))
+    return " ".join(content_parts), "\n".join(thinking_parts) if thinking_parts else None
+
+
 class LangSmithLogger(Logger):
     """
-    Implementation of Logger using OpenTelemetry for LangSmith.
-    TODO: This is broken.
+    Implementation of Logger using the LangSmith Python SDK (RunTree API).
+
+    Requires the ``langsmith`` package: ``pip install langsmith``
+
+    Environment variables:
+        LANGSMITH_API_KEY: Required. Your LangSmith API key.
+        LANGSMITH_ENDPOINT: Optional. Defaults to https://api.smith.langchain.com
     """
-    
-    def __init__(self, project_name: str = "default"):
-        self.tracer = self._setup_tracing(project_name)
-        self.root_span: Optional[Span] = None
-        self.agent_name: str = "unknown"
+
+    def __init__(
+        self,
+        project_name: str = "default",
+        agent_name: Optional[str] = None,
+        _parent_run=None,
+    ):
+        try:
+            from langsmith import Client
+            from langsmith.run_trees import RunTree
+        except ImportError:
+            raise ImportError(
+                "LangSmithLogger requires the 'langsmith' package. "
+                "Install it with: pip install langsmith"
+            )
+
+        self._RunTree = RunTree
+        self._is_child = _parent_run is not None
+        self._parent_run = _parent_run
+        self.project_name = project_name
+        self.agent_name: str = agent_name or "unknown"
         self.system_prompt: str = ""
+        self.user_prompt: str = ""
 
-    def _setup_tracing(self, project_name: str):
-        """Initialize OTel provider and exporter."""
-        # Environment variables should already be loaded by the calling module
-        langsmith_endpoint = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
-        langsmith_api_key = os.getenv("LANGSMITH_API_KEY")
-        
-        resource = Resource(attributes={
-            "service.name": "cal-agent",
-            "service.version": "1.0.0",
-        })
+        if not self._is_child:
+            api_key = os.getenv("LANGSMITH_API_KEY")
+            if not api_key:
+                raise EnvironmentError("LANGSMITH_API_KEY not set in environment")
+            self._client = Client()
+        else:
+            self._client = None
 
-        if not langsmith_api_key:
-            raise EnvironmentError("LANGSMITH_API_KEY not set in environment")
-        
-        otlp_exporter = OTLPSpanExporter(
-            endpoint=f"{langsmith_endpoint}/otel/v1/traces",
-            headers={
-                "x-api-key": langsmith_api_key,
-                "langsmith-project": project_name
-            },
-            timeout=30,
-        )
-        
-        provider = TracerProvider(resource=resource)
-        processor = BatchSpanProcessor(otlp_exporter)
-        provider.add_span_processor(processor)
-        trace.set_tracer_provider(provider)
-        self.provider = provider
-            
-        return trace.get_tracer(__name__, "1.0.0")
+        self.root_run = None  # RunTree for the agent trace
 
     def start_trace(self, name: str, user_prompt: str) -> Optional[str]:
-        # End any existing trace if start is called again improperly
-        if self.root_span:
-            print("Warning: start_trace called with existing active span. Ending previous span before starting new one.", file=sys.stderr)
-            self.root_span.end()
+        if self._is_child:
+            self.user_prompt = user_prompt
+            return None
 
-        # Start the root span (Agent Run)
-        self.root_span = self.tracer.start_span(name)
-        
-        # Prepare input value
-        input_value = f"User Prompt: {user_prompt}"
+        if self.root_run:
+            print(
+                "Warning: start_trace called with existing active run. "
+                "Ending previous run before starting new one.",
+                file=sys.stderr,
+            )
+            try:
+                self.root_run.end()
+                self.root_run.patch()
+            except Exception as e:
+                print(f"Warning: Failed to end previous LangSmith run: {e}", file=sys.stderr)
+
+        self.user_prompt = user_prompt
+
+        inputs = {"prompt": user_prompt}
         if self.system_prompt:
-             input_value = f"System Prompt: {self.system_prompt}\n\n{input_value}"
-             self.root_span.set_attribute("langsmith.metadata.system_prompt", self.system_prompt)
+            inputs["system_prompt"] = self.system_prompt
 
-        self.root_span.set_attribute("input.value", input_value)
-        
-        if self.agent_name:
-            self.root_span.set_attribute("session.id", self.agent_name)
-            self.root_span.set_attribute("langsmith.metadata.agent_name", self.agent_name)
+        self.root_run = self._RunTree(
+            name=name,
+            run_type="chain",
+            inputs=inputs,
+            project_name=self.project_name,
+            extra={
+                "metadata": {
+                    "agent_name": self.agent_name,
+                    "service": "cal-agent",
+                }
+            },
+        )
+        self.root_run.post()
 
-        return str(self.root_span.get_span_context().trace_id)
+        return str(self.root_run.id)
 
     def log_metadata(self, metadata: Dict[str, Any]) -> None:
-        """Store metadata to be used in current or future spans."""
         if "agent_name" in metadata:
             self.agent_name = metadata["agent_name"]
-        elif "session_id" in metadata:  # Backward compatibility
+        elif "session_id" in metadata:
             self.agent_name = metadata["session_id"]
         if "system_prompt" in metadata:
             self.system_prompt = metadata["system_prompt"]
-            
-        if self.root_span and self.root_span.is_recording():
-            for key, value in metadata.items():
-                self.root_span.set_attribute(f"langsmith.metadata.{key}", str(value))
+
+        run = self._parent_run if self._is_child else self.root_run
+        if run:
+            if run.extra is None:
+                run.extra = {}
+            run.extra.setdefault("metadata", {}).update(metadata)
 
     def log_llm_response(
-        self, 
-        message: Message, 
-        iteration: int, 
-        model: Optional[str] = None, 
+        self,
+        message: Message,
+        iteration: int,
+        model: Optional[str] = None,
         provider: Optional[str] = None,
         start_time: Optional[int] = None,
-        end_time: Optional[int] = None
+        end_time: Optional[int] = None,
     ) -> None:
-        if not self.root_span:
+        parent = self._parent_run if self._is_child else self.root_run
+        if not parent:
             return
 
-        ctx = trace.set_span_in_context(self.root_span)
-        
-        # Start span with explicit start_time (manual management for explicit end_time)
-        span = self.tracer.start_span(
-            "llm.generate_content", 
-            context=ctx,
-            start_time=start_time
-        )
-        
         try:
-            span.set_attribute("langsmith.span.kind", "LLM")
-            span.set_attribute("gen_ai.system", provider or "unknown")
-            span.set_attribute("gen_ai.request.model", model or "unknown")
-            span.set_attribute("session.id", self.agent_name)
-            span.set_attribute("langsmith.metadata.iteration", iteration)
+            content_text, thinking_text = _format_content(message)
 
-            # Format content — separate thinking from output
-            thinking_parts = []
-            content_parts = []
-            if isinstance(message.content, list):
-                for block in message.content:
-                    if isinstance(block, ThinkingBlock):
-                        thinking_parts.append(block.text)
-                    elif hasattr(block, 'text'):
-                        content_parts.append(block.text)
-                    elif isinstance(block, ToolUseBlock):
-                        content_parts.append(f"[Tool Use: {block.name}({json.dumps(block.input)})]")
-            else:
-                content_parts.append(str(message.content))
-
-            content_text = " ".join(content_parts)
-            span.set_attribute("gen_ai.completion.0.role", message.role.value)
-            span.set_attribute("gen_ai.completion.0.content", content_text)
-            if thinking_parts:
-                span.set_attribute("gen_ai.completion.0.thinking", "\n".join(thinking_parts))
-
-            # Token usage
             usage = message.usage or {}
-            prompt_tokens = usage.get('prompt_tokens', 0)
-            completion_tokens = usage.get('completion_tokens', 0)
-            total_tokens = usage.get('total_tokens', prompt_tokens + completion_tokens)
-            
-            span.set_attribute("gen_ai.usage.prompt_tokens", prompt_tokens)
-            span.set_attribute("gen_ai.usage.completion_tokens", completion_tokens)
-            span.set_attribute("gen_ai.usage.total_tokens", total_tokens)
-        finally:
-            # End span with explicit end_time
-            span.end(end_time=end_time)
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            completion_tokens = usage.get("completion_tokens", 0)
+            total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
+
+            inputs = {
+                "messages": [
+                    {"role": "system", "content": self.system_prompt or ""},
+                    {"role": "user", "content": self.user_prompt or ""},
+                ],
+            }
+
+            outputs = {
+                "choices": [
+                    {
+                        "message": {
+                            "role": message.role.value,
+                            "content": content_text,
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                },
+            }
+
+            extra_metadata = {
+                "iteration": iteration,
+                "agent_name": self.agent_name,
+                "provider": provider or "unknown",
+            }
+            if thinking_text:
+                extra_metadata["thinking"] = thinking_text
+
+            llm_run = parent.create_child(
+                name=f"llm.generate_content (iter {iteration})",
+                run_type="llm",
+                inputs=inputs,
+                extra={
+                    "metadata": extra_metadata,
+                    "invocation_params": {
+                        "model": model or "unknown",
+                        "provider": provider or "unknown",
+                    },
+                },
+            )
+            llm_run.post()
+
+            end_dt = _ns_to_datetime(end_time) or datetime.now(tz=timezone.utc)
+            llm_run.end(outputs=outputs, end_time=end_dt)
+            llm_run.patch()
+
+        except Exception as e:
+            print(f"Warning: Failed to log LLM response to LangSmith: {e}", file=sys.stderr)
 
     def log_tool_response(
-        self, 
-        tool_use: ToolUseBlock, 
+        self,
+        tool_use: ToolUseBlock,
         result: ToolResultBlock,
         start_time: Optional[int] = None,
-        end_time: Optional[int] = None
+        end_time: Optional[int] = None,
     ) -> None:
-        if not self.root_span:
+        parent = self._parent_run if self._is_child else self.root_run
+        if not parent:
             return
 
-        ctx = trace.set_span_in_context(self.root_span)
-        
-        # Start span with explicit start_time (manual management for explicit end_time)
-        span = self.tracer.start_span(
-            "tool.execute", 
-            context=ctx,
-            start_time=start_time
-        )
-        
         try:
-            span.set_attribute("langsmith.span.kind", "TOOL")
-            span.set_attribute("session.id", self.agent_name)
-            
-            # Input
-            input_str = json.dumps(tool_use.input) if isinstance(tool_use.input, dict) else str(tool_use.input)
-            span.set_attribute("input.value", input_str)
-            
-            # Output
+            input_data = tool_use.input if isinstance(tool_use.input, dict) else {"raw": str(tool_use.input)}
             output_content = result.content if isinstance(result.content, str) else str(result.content)
-            span.set_attribute("output.value", output_content)
-            
-            if result.is_error:
-                span.record_exception(Exception(result.content))
-                span.set_status(trace.Status(trace.StatusCode.ERROR))
-            
+
+            tool_run = parent.create_child(
+                name=f"tool.{tool_use.name}",
+                run_type="tool",
+                inputs=input_data,
+                extra={
+                    "metadata": {
+                        "agent_name": self.agent_name,
+                        "tool_use_id": tool_use.id,
+                    }
+                },
+            )
+            tool_run.post()
+
+            outputs = {"output": output_content}
             if result.metadata:
-                span.set_attribute("langsmith.metadata", json.dumps(result.metadata))
-        finally:
-            # End span with explicit end_time
-            span.end(end_time=end_time)
+                outputs["metadata"] = result.metadata
+
+            end_dt = _ns_to_datetime(end_time) or datetime.now(tz=timezone.utc)
+
+            if result.is_error:
+                tool_run.end(
+                    outputs=outputs,
+                    end_time=end_dt,
+                    error=output_content,
+                )
+            else:
+                tool_run.end(outputs=outputs, end_time=end_dt)
+            tool_run.patch()
+
+        except Exception as e:
+            print(f"Warning: Failed to log tool response to LangSmith: {e}", file=sys.stderr)
 
     def end_trace(self, output: str, metadata: Dict[str, Any]) -> None:
-        if not self.root_span:
-            print("Warning: end_trace called with no active span. Was start_trace called?", file=sys.stderr)
+        if self._is_child:
             return
 
-        self.root_span.set_attribute("output.value", output)
-        
-        for k, v in metadata.items():
-            if k == "status":
-                self.root_span.set_attribute("workflow.status", v)
-            elif k == "total_iterations":
-                self.root_span.set_attribute("total_iterations", v)
-            else:
-                self.root_span.set_attribute(f"langsmith.metadata.{k}", str(v))
+        if not self.root_run:
+            print(
+                "Warning: end_trace called with no active run. Was start_trace called?",
+                file=sys.stderr,
+            )
+            return
 
-        self.root_span.end()
-        self.root_span = None
+        try:
+            outputs = {"output": output}
+            outputs.update(metadata)
+            self.root_run.end(outputs=outputs)
+            self.root_run.patch()
+        except Exception as e:
+            print(f"Warning: Error ending LangSmith trace: {e}", file=sys.stderr)
+        finally:
+            self.root_run = None
 
     def flush(self, timeout_millis: int = 5000) -> None:
-        if hasattr(self, 'provider'):
-            self.provider.force_flush(timeout_millis=timeout_millis)
+        if self._is_child:
+            return
+        # RunTree uses synchronous HTTP calls (post/patch) so there is
+        # nothing to flush. This is kept for interface compatibility.
 
     def shutdown(self) -> None:
-        if hasattr(self, 'provider'):
-            self.provider.shutdown()
+        if self._is_child:
+            self.end_child()
+            return
+
+        if self.root_run:
+            try:
+                self.root_run.end(outputs={"output": "shutdown"})
+                self.root_run.patch()
+            except Exception as e:
+                print(f"Warning: Error ending run during shutdown: {e}", file=sys.stderr)
+            finally:
+                self.root_run = None
 
     def create_child_logger(self, name: str, agent_name: Optional[str] = None) -> "LangSmithLogger":
-        """Stub: TODO: come back to this."""
-        return self
+        """Create a child logger for sub-agent execution with nested run context."""
+        parent = self._parent_run if self._is_child else self.root_run
+        if not parent:
+            raise RuntimeError("Cannot create child logger: no active trace or parent run")
+
+        child_agent_name = agent_name if agent_name is not None else self.agent_name
+
+        wrapper_run = parent.create_child(
+            name=f"subagent_{name}",
+            run_type="chain",
+            inputs={"task": "subagent delegation"},
+            extra={
+                "metadata": {
+                    "type": "subagent",
+                    "subagent_name": name,
+                    "agent_name": child_agent_name,
+                }
+            },
+        )
+        wrapper_run.post()
+
+        child = LangSmithLogger(
+            project_name=self.project_name,
+            agent_name=child_agent_name,
+            _parent_run=wrapper_run,
+        )
+        child.system_prompt = self.system_prompt
+        child.user_prompt = self.user_prompt
+        return child
 
     def end_child(self) -> None:
-        """Stub: TODO: come back to this."""
-        pass
+        """End the wrapper run for this child logger."""
+        if not self._is_child:
+            raise RuntimeError("Cannot end child logger: not a child logger")
+
+        if self._parent_run is None:
+            return
+
+        try:
+            self._parent_run.end(outputs={"output": "subagent complete"})
+            self._parent_run.patch()
+        except Exception as e:
+            print(f"Warning: Error ending child LangSmith run: {e}", file=sys.stderr)
+        finally:
+            self._parent_run = None
 
 
 class MaximLogger(Logger):
