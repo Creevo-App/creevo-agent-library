@@ -16,20 +16,20 @@ from uuid import uuid4
 
 class Logger(ABC):
     """Abstract base class for logging implementations"""
-    
+
     @abstractmethod
     def log_llm_response(
-        self, 
-        message: Message, 
-        iteration: int, 
-        model: Optional[str] = None, 
+        self,
+        message: Message,
+        iteration: int,
+        model: Optional[str] = None,
         provider: Optional[str] = None,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None
     ) -> None:
         """
         Log LLM response to the tracing system.
-        
+
         Args:
             message: The message containing the LLM response
             iteration: The iteration number of this response
@@ -39,18 +39,18 @@ class Logger(ABC):
             end_time: End time in nanoseconds
         """
         pass
-    
+
     @abstractmethod
     def log_tool_response(
-        self, 
-        tool_use: ToolUseBlock, 
+        self,
+        tool_use: ToolUseBlock,
         result: ToolResultBlock,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None
     ) -> None:
         """
         Log tool call and result to the tracing system.
-        
+
         Args:
             tool_use: The tool use block containing tool call information
             result: The tool result block containing the result
@@ -58,52 +58,52 @@ class Logger(ABC):
             end_time: End time in nanoseconds
         """
         pass
-    
+
     @abstractmethod
     def start_trace(self, name: str, user_prompt: str) -> Optional[str]:
         """
         Start a new trace.
-        
+
         Args:
             name: Name of the trace
             user_prompt: The user's initial prompt
-            
+
         Returns:
             Trace ID if available, None otherwise
         """
         pass
-    
+
     @abstractmethod
     def end_trace(self, output: str, metadata: Dict[str, Any]) -> None:
         """
         End the current trace.
-        
+
         Args:
             output: The final output of the trace
             metadata: Additional metadata to attach to the trace
         """
         pass
-    
+
     @abstractmethod
     def log_metadata(self, metadata: Dict[str, Any]) -> None:
         """
         Log metadata to the current trace.
-        
+
         Args:
             metadata: Dictionary of metadata to log
         """
         pass
-    
+
     @abstractmethod
     def flush(self, timeout_millis: int = 5000) -> None:
         """
         Flush pending traces to the tracing system.
-        
+
         Args:
             timeout_millis: Maximum time to wait for flush (milliseconds)
         """
         pass
-    
+
     @abstractmethod
     def shutdown(self) -> None:
         """Shutdown the logger and flush any pending traces"""
@@ -145,7 +145,8 @@ def _format_content(message: Message) -> tuple:
     """Extract thinking and content parts from a message.
 
     Returns:
-        (content_text, thinking_text) tuple
+        (content_text, thinking_text) tuple where thinking_text is None
+        if no thinking blocks are present.
     """
     thinking_parts = []
     content_parts = []
@@ -180,7 +181,6 @@ class LangSmithLogger(Logger):
         _parent_run=None,
     ):
         try:
-            from langsmith import Client
             from langsmith.run_trees import RunTree
         except ImportError:
             raise ImportError(
@@ -200,9 +200,6 @@ class LangSmithLogger(Logger):
             api_key = os.getenv("LANGSMITH_API_KEY")
             if not api_key:
                 raise EnvironmentError("LANGSMITH_API_KEY not set in environment")
-            self._client = Client()
-        else:
-            self._client = None
 
         self.root_run = None  # RunTree for the agent trace
 
@@ -258,6 +255,10 @@ class LangSmithLogger(Logger):
             if run.extra is None:
                 run.extra = {}
             run.extra.setdefault("metadata", {}).update(metadata)
+            try:
+                run.patch()
+            except Exception as e:
+                print(f"Warning: Failed to persist metadata to LangSmith: {e}", file=sys.stderr)
 
     def log_llm_response(
         self,
@@ -478,11 +479,11 @@ class MaximLogger(Logger):
     """
     Implementation of Logger for Maxim AI using the updated SDK v0.1.3+.
     """
-    
+
     def __init__(self, agent_name: Optional[str] = None, _parent_span=None):
-        self._parent_span = _parent_span 
+        self._parent_span = _parent_span
         self._is_child = _parent_span is not None
-        
+
         if self._is_child:
             self.maxim_client = None
             self.logger_instance = None
@@ -493,31 +494,31 @@ class MaximLogger(Logger):
             self.logger_instance = self._setup_maxim()
             self.root_trace = None
             self.maxim_session = None  # Maxim session object for proper session linking
-        
+
         self.agent_name: str = agent_name or "unknown"
         self.system_prompt: str = ""
         self.user_prompt: str = ""
         self._is_shutdown = False  # Track shutdown state to avoid duplicate cleanup
-        
+
     def _setup_maxim(self):
         """Initialize Maxim client. Returns None if initialization fails."""
         maxim_api_key = os.getenv("MAXIM_API_KEY")
         maxim_log_repo_id = os.getenv("MAXIM_LOG_REPO_ID")
-        
+
         if not maxim_api_key:
             print("MaximLogger disabled: MAXIM_API_KEY not set in environment.", file=sys.stderr)
             return None
         if not maxim_log_repo_id:
             print("MaximLogger disabled: MAXIM_LOG_REPO_ID not set in environment.", file=sys.stderr)
             return None
-            
+
         try:
             from maxim import Maxim
             from maxim.logger import LoggerConfigDict
-            
+
             self.maxim_client = Maxim({"api_key": maxim_api_key})
             return self.maxim_client.logger(LoggerConfigDict(id=maxim_log_repo_id))
-            
+
         except ImportError:
             print("MaximLogger disabled: 'maxim-py' package not found. Please `pip install maxim-py`.", file=sys.stderr)
             return None
@@ -567,10 +568,10 @@ class MaximLogger(Logger):
         """End the wrapper span for this child logger."""
         if not self._is_child:
             raise RuntimeError("Cannot end child logger: not a child logger, this was called improperly.")
-        
+
         if self._parent_span is None:
             return
-        
+
         self._parent_span.end()
         self._parent_span = None
 
@@ -579,10 +580,10 @@ class MaximLogger(Logger):
         if self._is_child:
             self.user_prompt = user_prompt
             return None
-        
+
         if not self.logger_instance:
             return None
-        
+
         # Check for existing trace
         if self.root_trace:
             print("Warning: start_trace called with existing active trace. Ending previous trace before starting new one.", file=sys.stderr)
@@ -590,18 +591,18 @@ class MaximLogger(Logger):
                 self.root_trace.end()
             except Exception as e:
                 print(f"Warning: Failed to end previous Maxim trace: {e}", file=sys.stderr)
-        
+
         try:
             # Store user prompt for logging
             self.user_prompt = user_prompt
-            
+
             # Create or get Maxim session for proper session linking in UI
             if not self.maxim_session:
                 self.maxim_session = self.logger_instance.session({
                     "id": str(uuid4()),
                     "name": f"Session-{self.agent_name}"
                 })
-            
+
             trace_id = str(uuid4())
             # Create trace within the session context (not directly on logger)
             self.root_trace = self.maxim_session.trace({
@@ -611,23 +612,23 @@ class MaximLogger(Logger):
                     "service": "cal-agent"
                 }
             })
-            
+
             input_value = f"User Prompt: {user_prompt}"
             if self.system_prompt:
                  input_value = f"{input_value}\n\nSystem Prompt: {self.system_prompt}"
-            
+
             self.root_trace.set_input(input_value)
             return trace_id
-            
+
         except Exception as e:
             print(f"Warning: Failed to start Maxim trace: {e}", file=sys.stderr)
             return None
 
     def log_llm_response(
-        self, 
-        message: Message, 
-        iteration: int, 
-        model: Optional[str] = None, 
+        self,
+        message: Message,
+        iteration: int,
+        model: Optional[str] = None,
         provider: Optional[str] = None,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None
@@ -659,7 +660,7 @@ class MaximLogger(Logger):
                 "completion_tokens": completion_tokens,
                 "total_tokens": usage.get('total_tokens', prompt_tokens + completion_tokens)
             }
-            
+
             # Setup Generation Log - user prompt first, then system prompt
             messages = [
                 {"role": "user", "content": self.user_prompt or "No user prompt"},
@@ -670,29 +671,17 @@ class MaximLogger(Logger):
                 "name": "llm_inference",
                 "provider": provider or "unknown",
                 "model": model or "unknown",
-                "messages": messages, 
-                "model_parameters": {}, 
+                "messages": messages,
+                "model_parameters": {},
             })
-            
-            # Log the result — separate thinking from output content
-            thinking_parts = []
-            content_parts = []
-            if isinstance(message.content, list):
-                for block in message.content:
-                    if isinstance(block, ThinkingBlock):
-                        thinking_parts.append(block.text)
-                    elif hasattr(block, 'text'):
-                        content_parts.append(block.text)
-                    elif isinstance(block, ToolUseBlock):
-                        content_parts.append(f"[Tool Use: {block.name}({json.dumps(block.input)})]")
-            else:
-                content_parts.append(str(message.content))
-            content_text = " ".join(content_parts)
 
-            if thinking_parts:
-                span.add_tag("thinking", "\n".join(thinking_parts))
+            # Use shared helper to extract content
+            content_text, thinking_text = _format_content(message)
+
+            if thinking_text:
+                span.add_tag("thinking", thinking_text)
             created_time = int(end_time / 1e9) if end_time else int(time.time())
-            
+
             generation.result({
                 "id": str(uuid4()),
                 "object": "chat.completion",
@@ -708,15 +697,15 @@ class MaximLogger(Logger):
                 }],
                 "usage": tokens
             })
-            
+
             span.end()
-            
+
         except Exception as e:
             print(f"Warning: Failed to log LLM response to Maxim: {e}", file=sys.stderr)
 
     def log_tool_response(
-        self, 
-        tool_use: ToolUseBlock, 
+        self,
+        tool_use: ToolUseBlock,
         result: ToolResultBlock,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None
@@ -724,7 +713,7 @@ class MaximLogger(Logger):
         span_parent = self._parent_span if self._is_child else self.root_trace
         if not span_parent:
             return
-            
+
         try:
             # Create a span for the tool execution
             span_id = str(uuid4())
@@ -737,28 +726,28 @@ class MaximLogger(Logger):
                     "is_error": result.is_error
                 }
             })
-            
+
             input_str = json.dumps(tool_use.input) if isinstance(tool_use.input, dict) else str(tool_use.input)
             span.add_tag("input", input_str)
-            
+
             output_content = result.content if isinstance(result.content, str) else str(result.content)
             span.add_tag("output", output_content)
 
             if result.metadata:
                 for k, v in result.metadata.items():
                     span.add_tag(k, str(v))
-            
+
             span.end()
-            
+
         except Exception as e:
             print(f"Warning: Failed to log Tool response to Maxim: {e}", file=sys.stderr)
 
     def end_trace(self, output: str, metadata: Dict[str, Any]) -> None:
         # Child loggers don't manage their own trace
         if self._is_child:
-            
+
             return
-        
+
         if not self.root_trace:
             print("Warning: end_trace called with no active trace. Was start_trace called?", file=sys.stderr)
             return
@@ -768,7 +757,7 @@ class MaximLogger(Logger):
             if metadata:
                 for k, v in metadata.items():
                     self.root_trace.add_tag(k, str(v))
-            
+
             # End the trace - this may trigger async flushing
             self.root_trace.end()
         except Exception as e:
@@ -788,7 +777,7 @@ class MaximLogger(Logger):
                 for k, v in metadata.items():
                     self._parent_span.add_tag(k, str(v))
             return
-            
+
         if self.root_trace:
             for k, v in metadata.items():
                 self.root_trace.add_tag(k, str(v))
@@ -797,11 +786,11 @@ class MaximLogger(Logger):
         # Child loggers don't manage flush
         if self._is_child:
             return
-        
+
         # Skip if already shutdown
         if self._is_shutdown:
             return
-            
+
         # Maxim SDK handles flushing internally usually, or via end()
         # If there's an active trace, ensure it's ended before flushing
         if self.root_trace:
@@ -812,9 +801,9 @@ class MaximLogger(Logger):
                     print(f"Warning: Error ending trace during flush: {e}", file=sys.stderr)
             finally:
                 self.root_trace = None
-        
+
         # Note: Don't end session on flush - session persists across multiple traces/requests
-        
+
         # Use the logger's flush method if available
         if self.logger_instance:
             try:
@@ -832,12 +821,12 @@ class MaximLogger(Logger):
         if self._is_child:
             self.end_child()
             return
-        
+
         # Prevent duplicate shutdown calls
         if self._is_shutdown:
             return
         self._is_shutdown = True
-        
+
         # Ensure trace is ended before shutdown
         if self.root_trace:
             try:
@@ -847,7 +836,7 @@ class MaximLogger(Logger):
                     print(f"Warning: Error ending trace during shutdown: {e}", file=sys.stderr)
             finally:
                 self.root_trace = None
-        
+
         # End the Maxim session
         if self.maxim_session:
             try:
@@ -857,7 +846,7 @@ class MaximLogger(Logger):
                     print(f"Warning: Error ending Maxim session: {e}", file=sys.stderr)
             finally:
                 self.maxim_session = None
-        
+
         # Properly cleanup the Maxim client
         if self.maxim_client:
             try:

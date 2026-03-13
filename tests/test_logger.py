@@ -47,9 +47,21 @@ def test_langsmith_logger_requires_langsmith_package(monkeypatch):
 
 @pytest.fixture
 def langsmith_logger(monkeypatch):
-    """Create a LangSmithLogger with mocked LangSmith Client."""
+    """Create a LangSmithLogger with mocked RunTree to avoid network calls."""
     monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_test_key")
     logger = LangSmithLogger(project_name="test-project", agent_name="test-agent")
+
+    # Replace RunTree with a MagicMock factory so start_trace/create_child
+    # don't make real HTTP requests.
+    def make_mock_run(**kwargs):
+        run = MagicMock()
+        run.id = "mock-run-id"
+        run.extra = kwargs.get("extra", {})
+        # create_child should also return mocks with the same interface
+        run.create_child.side_effect = lambda **kw: make_mock_run(**kw)
+        return run
+
+    logger._RunTree = MagicMock(side_effect=lambda **kw: make_mock_run(**kw))
     return logger
 
 
