@@ -311,10 +311,13 @@ class LangSmithLogger(Logger):
             if thinking_text:
                 extra_metadata["thinking"] = thinking_text
 
+            start_dt = _ns_to_datetime(start_time)
+
             llm_run = parent.create_child(
                 name=f"llm.generate_content (iter {iteration})",
                 run_type="llm",
                 inputs=inputs,
+                start_time=start_dt,
                 extra={
                     "metadata": extra_metadata,
                     "invocation_params": {
@@ -347,10 +350,13 @@ class LangSmithLogger(Logger):
             input_data = tool_use.input if isinstance(tool_use.input, dict) else {"raw": str(tool_use.input)}
             output_content = result.content if isinstance(result.content, str) else str(result.content)
 
+            start_dt = _ns_to_datetime(start_time)
+
             tool_run = parent.create_child(
                 name=f"tool.{tool_use.name}",
                 run_type="tool",
                 inputs=input_data,
+                start_time=start_dt,
                 extra={
                     "metadata": {
                         "agent_name": self.agent_name,
