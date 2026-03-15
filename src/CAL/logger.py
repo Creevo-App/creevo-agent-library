@@ -1,5 +1,5 @@
 """
-Abstract Logger interface for Maxim AI and LangSmith
+Abstract Logger interface for Maxim AI, Sentry AI Agent Monitoring, and LangSmith
 """
 
 from abc import ABC, abstractmethod
@@ -497,7 +497,7 @@ class MaximLogger(Logger):
         self.agent_name: str = agent_name or "unknown"
         self.system_prompt: str = ""
         self.user_prompt: str = ""
-        self._is_shutdown = False  # Track shutdown state to avoid duplicate cleanup
+        self._is_shutdown = False
 
     def _setup_maxim(self):
         """Initialize Maxim client. Returns None if initialization fails."""
@@ -821,7 +821,6 @@ class MaximLogger(Logger):
             self.end_child()
             return
 
-        # Prevent duplicate shutdown calls
         if self._is_shutdown:
             return
         self._is_shutdown = True
@@ -863,3 +862,264 @@ class MaximLogger(Logger):
             finally:
                 self.maxim_client = None
                 self.logger_instance = None
+
+
+class SentryLogger(Logger):
+    """
+    Implementation of Logger using Sentry AI Agent Monitoring.
+
+    Uses Sentry's manual instrumentation API to create gen_ai.* spans that
+    appear in the AI Agents Insights dashboard. Requires ``sentry_sdk`` to be
+    initialized (via ``sentry_sdk.init()``) before use -- typically at
+    application startup.
+
+    Requires the ``sentry-sdk`` package: ``pip install sentry-sdk``
+    """
+
+    def __init__(self, agent_name: Optional[str] = None, _parent_span=None):
+        try:
+            import sentry_sdk as _sentry_sdk
+            self._sentry_sdk = _sentry_sdk
+        except ImportError:
+            raise ImportError(
+                "SentryLogger requires the 'sentry-sdk' package. "
+                "Install it with: pip install sentry-sdk"
+            )
+
+        self._parent_span = _parent_span
+        self._is_child = _parent_span is not None
+        self.agent_name: str = agent_name or "unknown"
+        self.system_prompt: str = ""
+        self.user_prompt: str = ""
+        self._root_span = None
+        self._is_shutdown = False
+
+    def start_trace(self, name: str, user_prompt: str) -> Optional[str]:
+        if self._is_child:
+            self.user_prompt = user_prompt
+            return None
+
+        if self._root_span:
+            print(
+                "Warning: start_trace called with existing active trace. "
+                "Ending previous trace before starting new one.",
+                file=sys.stderr,
+            )
+            try:
+                self._root_span.__exit__(None, None, None)
+            except Exception as e:
+                print(f"Warning: Failed to end previous Sentry trace: {e}", file=sys.stderr)
+
+        self.user_prompt = user_prompt
+
+        try:
+            self._root_span = self._sentry_sdk.start_span(
+                op="gen_ai.invoke_agent",
+                name=f"invoke_agent {self.agent_name}",
+            )
+            self._root_span.__enter__()
+            self._root_span.set_data("gen_ai.agent.name", self.agent_name)
+            self._root_span.set_data("gen_ai.operation.name", "invoke_agent")
+
+            messages = [{"role": "user", "content": user_prompt}]
+            if self.system_prompt:
+                messages.insert(0, {"role": "system", "content": self.system_prompt})
+            self._root_span.set_data("gen_ai.request.messages", json.dumps(messages))
+
+            return getattr(self._root_span, "span_id", str(uuid4()))
+
+        except Exception as e:
+            print(f"Warning: Failed to start Sentry trace: {e}", file=sys.stderr)
+            if self._root_span:
+                try:
+                    self._root_span.__exit__(None, None, None)
+                except Exception:
+                    pass
+            self._root_span = None
+            return None
+
+    def log_llm_response(
+        self,
+        message: Message,
+        iteration: int,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+    ) -> None:
+        active_span = self._parent_span if self._is_child else self._root_span
+        if not active_span:
+            return
+
+        try:
+            model_name = model or "unknown"
+            start_dt = _ns_to_datetime(start_time)
+
+            # gen_ai.request.model is required on all AI spans; propagate to parent
+            if active_span:
+                active_span.set_data("gen_ai.request.model", model_name)
+
+            with self._sentry_sdk.start_span(
+                op="gen_ai.request",
+                name=f"request {model_name}",
+                start_timestamp=start_dt,
+            ) as span:
+                span.set_data("gen_ai.request.model", model_name)
+                span.set_data("gen_ai.agent.name", self.agent_name)
+                span.set_data("gen_ai.operation.name", "request")
+
+                messages = [
+                    {"role": "system", "content": self.system_prompt or ""},
+                    {"role": "user", "content": self.user_prompt or ""},
+                ]
+                span.set_data("gen_ai.request.messages", json.dumps(messages))
+
+                content_text, thinking_text = _format_content(message)
+                span.set_data("gen_ai.response.text", json.dumps([content_text]))
+                if thinking_text:
+                    span.set_data("gen_ai.response.thinking", thinking_text)
+
+                usage = message.usage or {}
+                prompt_tokens = usage.get("prompt_tokens", 0)
+                completion_tokens = usage.get("completion_tokens", 0)
+                total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
+                span.set_data("gen_ai.usage.input_tokens", prompt_tokens)
+                span.set_data("gen_ai.usage.output_tokens", completion_tokens)
+                span.set_data("gen_ai.usage.total_tokens", total_tokens)
+
+        except Exception as e:
+            print(f"Warning: Failed to log LLM response to Sentry: {e}", file=sys.stderr)
+
+    def log_tool_response(
+        self,
+        tool_use: ToolUseBlock,
+        result: ToolResultBlock,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+    ) -> None:
+        active_span = self._parent_span if self._is_child else self._root_span
+        if not active_span:
+            return
+
+        try:
+            start_dt = _ns_to_datetime(start_time)
+
+            with self._sentry_sdk.start_span(
+                op="gen_ai.execute_tool",
+                name=f"execute_tool {tool_use.name}",
+                start_timestamp=start_dt,
+            ) as span:
+                span.set_data("gen_ai.tool.name", tool_use.name)
+                span.set_data("gen_ai.tool.type", "function")
+
+                input_str = json.dumps(tool_use.input) if isinstance(tool_use.input, dict) else str(tool_use.input)
+                span.set_data("gen_ai.tool.input", input_str)
+
+                output_content = result.content if isinstance(result.content, str) else str(result.content)
+                span.set_data("gen_ai.tool.output", output_content)
+
+                if result.is_error:
+                    span.set_status("internal_error")
+
+        except Exception as e:
+            print(f"Warning: Failed to log tool response to Sentry: {e}", file=sys.stderr)
+
+    def end_trace(self, output: str, metadata: Dict[str, Any]) -> None:
+        if self._is_child:
+            return
+
+        if not self._root_span:
+            print(
+                "Warning: end_trace called with no active trace. Was start_trace called?",
+                file=sys.stderr,
+            )
+            return
+
+        try:
+            self._root_span.set_data("gen_ai.response.text", json.dumps([output]))
+            for k, v in (metadata or {}).items():
+                self._root_span.set_data(k, str(v))
+            self._root_span.__exit__(None, None, None)
+        except Exception as e:
+            print(f"Warning: Error ending Sentry trace: {e}", file=sys.stderr)
+        finally:
+            self._root_span = None
+
+    def log_metadata(self, metadata: Dict[str, Any]) -> None:
+        if "agent_name" in metadata:
+            self.agent_name = metadata["agent_name"]
+        elif "session_id" in metadata:
+            self.agent_name = metadata["session_id"]
+        if "system_prompt" in metadata:
+            self.system_prompt = metadata["system_prompt"]
+
+        active_span = self._parent_span if self._is_child else self._root_span
+        if active_span:
+            for k, v in metadata.items():
+                active_span.set_data(k, str(v))
+
+    def flush(self, timeout_millis: int = 5000) -> None:
+        if self._is_child or self._is_shutdown:
+            return
+        try:
+            self._sentry_sdk.flush(timeout=timeout_millis / 1000)
+        except Exception as e:
+            print(f"Warning: Error flushing Sentry SDK: {e}", file=sys.stderr)
+
+    def shutdown(self) -> None:
+        if self._is_child:
+            self.end_child()
+            return
+
+        if self._is_shutdown:
+            return
+        self._is_shutdown = True
+
+        if self._root_span:
+            try:
+                self._root_span.__exit__(None, None, None)
+            except Exception as e:
+                print(f"Warning: Error ending span during shutdown: {e}", file=sys.stderr)
+            finally:
+                self._root_span = None
+
+        try:
+            self._sentry_sdk.flush()
+        except Exception as e:
+            print(f"Warning: Error flushing Sentry SDK during shutdown: {e}", file=sys.stderr)
+
+    def create_child_logger(self, name: str, agent_name: Optional[str] = None) -> "SentryLogger":
+        """Create a child logger for sub-agent execution with nested span context."""
+        active_span = self._parent_span if self._is_child else self._root_span
+        if not active_span:
+            raise RuntimeError("Cannot create child logger: no active trace or parent span")
+
+        child_agent_name = agent_name if agent_name is not None else self.agent_name
+
+        wrapper_span = self._sentry_sdk.start_span(
+            op="gen_ai.invoke_agent",
+            name=f"invoke_agent {child_agent_name}",
+        )
+        wrapper_span.__enter__()
+        wrapper_span.set_data("gen_ai.agent.name", child_agent_name)
+        wrapper_span.set_data("gen_ai.operation.name", "invoke_agent")
+
+        child = SentryLogger(agent_name=child_agent_name, _parent_span=wrapper_span)
+        child.system_prompt = self.system_prompt
+        child.user_prompt = self.user_prompt
+        return child
+
+    def end_child(self) -> None:
+        """End the wrapper span for this child logger."""
+        if not self._is_child:
+            raise RuntimeError("Cannot end child logger: not a child logger")
+
+        if self._parent_span is None:
+            return
+
+        try:
+            self._parent_span.__exit__(None, None, None)
+        except Exception as e:
+            print(f"Warning: Error ending child Sentry span: {e}", file=sys.stderr)
+        finally:
+            self._parent_span = None

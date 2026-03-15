@@ -52,7 +52,7 @@ CAL provides:
 - **Memory**: Conversation memory management with compression support
 - **Tool**: Tool system with `@tool` decorator for easy tool creation
 - **Message**: Message and content block types for conversation handling
-- **Logger**: OpenTelemetry and Maxim AI logging support
+- **Logger**: OpenTelemetry, Maxim AI, and Sentry AI Agent Monitoring support
 
 ## Components
 

@@ -9,7 +9,7 @@ load_dotenv(Path(__file__).parent / ".env")
 
 from CAL.agent import Agent
 from CAL.content_blocks import TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock
-from CAL.logger import LangSmithLogger, MaximLogger
+from CAL.logger import LangSmithLogger, MaximLogger, SentryLogger
 from CAL.message import Message, MessageRole
 from conftest import QueueLLM
 
@@ -301,6 +301,317 @@ def test_maxim_logger_records_trace_data(capsys):
     logger.shutdown()
     _, err = capsys.readouterr()
     assert "MaximSDK" not in err
+
+
+# ---------------------------------------------------------------------------
+# Sentry Logger — unit tests (mocked SDK)
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_span():
+    """Create a MagicMock that behaves like a sentry_sdk span."""
+    span = MagicMock()
+    span.__enter__ = MagicMock(return_value=span)
+    span.__exit__ = MagicMock(return_value=False)
+    span.span_id = "mock-span-id"
+    return span
+
+
+@pytest.fixture
+def sentry_logger():
+    """Create a SentryLogger with mocked sentry_sdk to avoid real tracing."""
+    mock_sdk = MagicMock()
+    created_spans = []
+
+    def mock_start_span(**kwargs):
+        span = _make_mock_span()
+        span.op = kwargs.get("op", "")
+        span.name = kwargs.get("name", "")
+        created_spans.append(span)
+        return span
+
+    mock_sdk.start_span = MagicMock(side_effect=mock_start_span)
+
+    with patch.dict("sys.modules", {"sentry_sdk": mock_sdk}):
+        logger = SentryLogger(agent_name="test-agent")
+
+    logger._sentry_sdk = mock_sdk
+    logger._created_spans = created_spans
+    return logger
+
+
+def test_sentry_start_and_end_trace(sentry_logger):
+    trace_id = sentry_logger.start_trace("agent.run", "hello world")
+    assert trace_id is not None
+    assert sentry_logger._root_span is not None
+    assert sentry_logger.user_prompt == "hello world"
+
+    sentry_logger._sentry_sdk.start_span.assert_called_once()
+    call_kwargs = sentry_logger._sentry_sdk.start_span.call_args[1]
+    assert call_kwargs["op"] == "gen_ai.invoke_agent"
+    assert "invoke_agent test-agent" in call_kwargs["name"]
+
+    sentry_logger.end_trace("done", {"status": "ok"})
+    assert sentry_logger._root_span is None
+
+
+def test_sentry_log_metadata(sentry_logger):
+    sentry_logger.start_trace("test", "prompt")
+
+    sentry_logger.log_metadata({"agent_name": "new-agent", "system_prompt": "be helpful"})
+    assert sentry_logger.agent_name == "new-agent"
+    assert sentry_logger.system_prompt == "be helpful"
+
+    sentry_logger.end_trace("done", {})
+
+
+def test_sentry_log_llm_response(sentry_logger):
+    sentry_logger.start_trace("test", "prompt")
+
+    message = Message(
+        role=MessageRole.ASSISTANT,
+        content=[TextBlock(text="hello")],
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    )
+    sentry_logger.log_llm_response(
+        message, iteration=0, model="gemini-2.0-flash", provider="google",
+        start_time=1000000000, end_time=2000000000,
+    )
+
+    calls = sentry_logger._sentry_sdk.start_span.call_args_list
+    llm_call = calls[-1]
+    assert llm_call[1]["op"] == "gen_ai.request"
+    assert "gemini-2.0-flash" in llm_call[1]["name"]
+    assert llm_call[1]["start_timestamp"] is not None
+
+    # Model should be propagated to the root/parent span (required attribute)
+    root_span = sentry_logger._root_span
+    root_span.set_data.assert_any_call("gen_ai.request.model", "gemini-2.0-flash")
+
+    sentry_logger.end_trace("done", {})
+
+
+def test_sentry_log_llm_response_with_thinking(sentry_logger):
+    sentry_logger.start_trace("test", "prompt")
+
+    message = Message(
+        role=MessageRole.ASSISTANT,
+        content=[
+            ThinkingBlock(text="let me think..."),
+            TextBlock(text="the answer is 42"),
+        ],
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    )
+    sentry_logger.log_llm_response(message, iteration=0)
+
+    # The LLM span is the last one created (index 1; index 0 is the root span)
+    llm_span = sentry_logger._created_spans[-1]
+    llm_span.set_data.assert_any_call("gen_ai.response.thinking", "let me think...")
+
+    sentry_logger.end_trace("done", {})
+
+
+def test_sentry_log_tool_response(sentry_logger):
+    sentry_logger.start_trace("test", "prompt")
+
+    tool_use = ToolUseBlock(id="tu-1", name="search", input={"query": "weather"})
+    tool_result = ToolResultBlock(tool_use_id="tu-1", content="sunny", name="search")
+
+    sentry_logger.log_tool_response(
+        tool_use, tool_result,
+        start_time=1000000000, end_time=2000000000,
+    )
+
+    calls = sentry_logger._sentry_sdk.start_span.call_args_list
+    tool_call = calls[-1]
+    assert tool_call[1]["op"] == "gen_ai.execute_tool"
+    assert "search" in tool_call[1]["name"]
+    assert tool_call[1]["start_timestamp"] is not None
+
+    sentry_logger.end_trace("done", {})
+
+
+def test_sentry_log_tool_error(sentry_logger):
+    sentry_logger.start_trace("test", "prompt")
+
+    tool_use = ToolUseBlock(id="tu-2", name="broken", input={})
+    tool_result = ToolResultBlock(
+        tool_use_id="tu-2", content="something went wrong",
+        is_error=True, name="broken",
+    )
+
+    sentry_logger.log_tool_response(tool_use, tool_result)
+
+    # Error tool spans should be marked with error status
+    tool_span = sentry_logger._created_spans[-1]
+    tool_span.set_status.assert_called_once_with("internal_error")
+
+    sentry_logger.end_trace("done", {})
+
+
+def test_sentry_noop_without_trace(sentry_logger):
+    """Logging calls should silently no-op without an active trace."""
+    message = Message(
+        role=MessageRole.ASSISTANT,
+        content=[TextBlock(text="hello")],
+        usage={},
+    )
+    sentry_logger.log_llm_response(message, iteration=0)
+
+    tool_use = ToolUseBlock(id="tu-3", name="test", input={})
+    tool_result = ToolResultBlock(tool_use_id="tu-3", content="ok", name="test")
+    sentry_logger.log_tool_response(tool_use, tool_result)
+
+    sentry_logger.flush()
+    sentry_logger.shutdown()
+
+
+def test_sentry_create_child_logger(sentry_logger):
+    sentry_logger.start_trace("test", "prompt")
+
+    child = sentry_logger.create_child_logger("code_reviewer", agent_name="reviewer-agent")
+    assert child._is_child is True
+    assert child.agent_name == "reviewer-agent"
+    assert child._parent_span is not None
+
+    message = Message(
+        role=MessageRole.ASSISTANT,
+        content=[TextBlock(text="review complete")],
+        usage={"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+    )
+    child.log_llm_response(message, iteration=0, model="gemini-2.0-flash")
+
+    child.end_child()
+    assert child._parent_span is None
+
+    sentry_logger.end_trace("done", {})
+
+
+def test_sentry_child_inherits_agent_name(sentry_logger):
+    sentry_logger.agent_name = "parent-agent"
+    sentry_logger.start_trace("test", "prompt")
+
+    child = sentry_logger.create_child_logger("reviewer")
+    assert child.agent_name == "parent-agent"
+
+    child.end_child()
+    sentry_logger.end_trace("done", {})
+
+
+def test_sentry_child_start_trace_is_noop(sentry_logger):
+    sentry_logger.start_trace("test", "prompt")
+    child = sentry_logger.create_child_logger("sub")
+
+    result = child.start_trace("should-be-ignored", "child prompt")
+    assert result is None
+    assert child.user_prompt == "child prompt"
+
+    child.end_child()
+    sentry_logger.end_trace("done", {})
+
+
+def test_sentry_child_end_trace_is_noop(sentry_logger):
+    sentry_logger.start_trace("test", "prompt")
+    child = sentry_logger.create_child_logger("sub")
+
+    child.end_trace("output", {"key": "value"})
+    assert sentry_logger._root_span is not None
+
+    child.end_child()
+    sentry_logger.end_trace("done", {})
+
+
+def test_sentry_end_child_raises_on_parent(sentry_logger):
+    with pytest.raises(RuntimeError, match="not a child"):
+        sentry_logger.end_child()
+
+
+def test_sentry_create_child_raises_without_trace(sentry_logger):
+    with pytest.raises(RuntimeError, match="no active trace"):
+        sentry_logger.create_child_logger("sub")
+
+
+def test_sentry_flush_calls_sdk(sentry_logger):
+    sentry_logger.start_trace("test", "prompt")
+    sentry_logger.flush()
+    sentry_logger._sentry_sdk.flush.assert_called_once()
+    sentry_logger.end_trace("done", {})
+
+
+def test_sentry_shutdown_flushes(sentry_logger):
+    sentry_logger.start_trace("test", "prompt")
+    sentry_logger.shutdown()
+    sentry_logger._sentry_sdk.flush.assert_called_once()
+
+
+def test_sentry_shutdown_idempotent(sentry_logger):
+    sentry_logger.start_trace("test", "prompt")
+    sentry_logger.shutdown()
+    sentry_logger.shutdown()  # Should not raise
+
+
+def test_sentry_double_start_trace_warns(sentry_logger, capsys):
+    sentry_logger.start_trace("first", "prompt1")
+    sentry_logger.start_trace("second", "prompt2")
+
+    _, err = capsys.readouterr()
+    assert "Warning" in err
+    assert sentry_logger._root_span is not None
+
+    sentry_logger.end_trace("done", {})
+
+
+def test_sentry_requires_sentry_sdk_package():
+    """If sentry-sdk is not installed, __init__ raises ImportError."""
+    original_import = __builtins__.__import__ if hasattr(__builtins__, '__import__') else __import__
+
+    def mock_import(name, *args, **kwargs):
+        if name == "sentry_sdk" or name.startswith("sentry_sdk."):
+            raise ImportError("No module named 'sentry_sdk'")
+        return original_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=mock_import):
+        with pytest.raises(ImportError, match="sentry-sdk"):
+            SentryLogger(agent_name="test")
+
+
+@pytest.mark.integration
+def test_sentry_logger_integration():
+    """Integration test: sends real spans to Sentry. Requires SENTRY_DSN."""
+    dsn = os.getenv("SENTRY_DSN")
+    if not dsn:
+        pytest.skip("SENTRY_DSN must be set for integration test")
+
+    import sentry_sdk
+    sentry_sdk.init(dsn=dsn, traces_sample_rate=1.0)
+
+    logger = SentryLogger(agent_name="test-agent")
+
+    trace_id = logger.start_trace("integration-test", "test prompt")
+    assert trace_id is not None
+
+    message = Message(
+        role=MessageRole.ASSISTANT,
+        content=[TextBlock(text="hello")],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+    logger.log_llm_response(message, iteration=0, model="gemini-2.0-flash", provider="google")
+
+    tool_use = ToolUseBlock(id="tu-int", name="calculator", input={"expression": "2+2"})
+    tool_result = ToolResultBlock(tool_use_id="tu-int", content="4", name="calculator")
+    logger.log_tool_response(tool_use, tool_result)
+
+    child = logger.create_child_logger("math_expert", agent_name="math-sub")
+    child_msg = Message(
+        role=MessageRole.ASSISTANT,
+        content=[TextBlock(text="confirmed: 4")],
+        usage={"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+    )
+    child.log_llm_response(child_msg, iteration=0, model="gemini-2.0-flash")
+    child.end_child()
+
+    logger.end_trace("The answer is 4", {"status": "completed_success", "total_iterations": 1})
+    logger.shutdown()
 
 
 @pytest.mark.integration
