@@ -899,6 +899,14 @@ class SentryLogger(Logger):
             self.user_prompt = user_prompt
             return None
 
+        if not self._sentry_sdk.is_initialized():
+            print(
+                "Warning: sentry_sdk is not initialized. "
+                "Call sentry_sdk.init() before using SentryLogger.",
+                file=sys.stderr,
+            )
+            return None
+
         if self._root_span:
             print(
                 "Warning: start_trace called with existing active trace. "
@@ -917,6 +925,10 @@ class SentryLogger(Logger):
                 op="gen_ai.invoke_agent",
                 name=f"invoke_agent {self.agent_name}",
             )
+            # __enter__ activates this span in the scope so that child spans
+            # created via start_span() in log_llm_response / log_tool_response
+            # automatically parent under it.  Matched by __exit__ in end_trace
+            # / shutdown which finishes the span AND restores the prior scope.
             self._root_span.__enter__()
             self._root_span.set_data("gen_ai.agent.name", self.agent_name)
             self._root_span.set_data("gen_ai.operation.name", "invoke_agent")
@@ -954,16 +966,18 @@ class SentryLogger(Logger):
         try:
             model_name = model or "unknown"
             start_dt = _ns_to_datetime(start_time)
+            end_dt = _ns_to_datetime(end_time)
 
-            # gen_ai.request.model is required on all AI spans; propagate to parent
-            if active_span:
-                active_span.set_data("gen_ai.request.model", model_name)
+            active_span.set_data("gen_ai.request.model", model_name)
 
-            with self._sentry_sdk.start_span(
+            # Leaf span: no children, so we skip the context manager and call
+            # finish() directly to honour the caller-provided end_time.
+            span = self._sentry_sdk.start_span(
                 op="gen_ai.request",
                 name=f"request {model_name}",
                 start_timestamp=start_dt,
-            ) as span:
+            )
+            try:
                 span.set_data("gen_ai.request.model", model_name)
                 span.set_data("gen_ai.agent.name", self.agent_name)
                 span.set_data("gen_ai.operation.name", "request")
@@ -986,6 +1000,8 @@ class SentryLogger(Logger):
                 span.set_data("gen_ai.usage.input_tokens", prompt_tokens)
                 span.set_data("gen_ai.usage.output_tokens", completion_tokens)
                 span.set_data("gen_ai.usage.total_tokens", total_tokens)
+            finally:
+                span.finish(end_timestamp=end_dt)
 
         except Exception as e:
             print(f"Warning: Failed to log LLM response to Sentry: {e}", file=sys.stderr)
@@ -1003,12 +1019,15 @@ class SentryLogger(Logger):
 
         try:
             start_dt = _ns_to_datetime(start_time)
+            end_dt = _ns_to_datetime(end_time)
 
-            with self._sentry_sdk.start_span(
+            # Leaf span: finish() called directly to honour caller-provided end_time.
+            span = self._sentry_sdk.start_span(
                 op="gen_ai.execute_tool",
                 name=f"execute_tool {tool_use.name}",
                 start_timestamp=start_dt,
-            ) as span:
+            )
+            try:
                 span.set_data("gen_ai.tool.name", tool_use.name)
                 span.set_data("gen_ai.tool.type", "function")
 
@@ -1020,6 +1039,8 @@ class SentryLogger(Logger):
 
                 if result.is_error:
                     span.set_status("internal_error")
+            finally:
+                span.finish(end_timestamp=end_dt)
 
         except Exception as e:
             print(f"Warning: Failed to log tool response to Sentry: {e}", file=sys.stderr)
@@ -1100,6 +1121,8 @@ class SentryLogger(Logger):
             op="gen_ai.invoke_agent",
             name=f"invoke_agent {child_agent_name}",
         )
+        # Activate in scope so the child logger's start_span() calls nest here.
+        # Matched by __exit__ in end_child().
         wrapper_span.__enter__()
         wrapper_span.set_data("gen_ai.agent.name", child_agent_name)
         wrapper_span.set_data("gen_ai.operation.name", "invoke_agent")

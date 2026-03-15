@@ -331,6 +331,7 @@ def sentry_logger():
         return span
 
     mock_sdk.start_span = MagicMock(side_effect=mock_start_span)
+    mock_sdk.is_initialized = MagicMock(return_value=True)
 
     with patch.dict("sys.modules", {"sentry_sdk": mock_sdk}):
         logger = SentryLogger(agent_name="test-agent")
@@ -388,6 +389,12 @@ def test_sentry_log_llm_response(sentry_logger):
     root_span = sentry_logger._root_span
     root_span.set_data.assert_any_call("gen_ai.request.model", "gemini-2.0-flash")
 
+    # Span should be finished with the caller-provided end_time
+    llm_span = sentry_logger._created_spans[-1]
+    llm_span.finish.assert_called_once()
+    finish_kwargs = llm_span.finish.call_args[1]
+    assert finish_kwargs["end_timestamp"] is not None
+
     sentry_logger.end_trace("done", {})
 
 
@@ -427,6 +434,12 @@ def test_sentry_log_tool_response(sentry_logger):
     assert tool_call[1]["op"] == "gen_ai.execute_tool"
     assert "search" in tool_call[1]["name"]
     assert tool_call[1]["start_timestamp"] is not None
+
+    # Span should be finished with the caller-provided end_time
+    tool_span = sentry_logger._created_spans[-1]
+    tool_span.finish.assert_called_once()
+    finish_kwargs = tool_span.finish.call_args[1]
+    assert finish_kwargs["end_timestamp"] is not None
 
     sentry_logger.end_trace("done", {})
 
@@ -559,6 +572,18 @@ def test_sentry_double_start_trace_warns(sentry_logger, capsys):
     assert sentry_logger._root_span is not None
 
     sentry_logger.end_trace("done", {})
+
+
+def test_sentry_start_trace_warns_if_not_initialized(sentry_logger, capsys):
+    """start_trace should return None and warn if sentry_sdk.init() was never called."""
+    sentry_logger._sentry_sdk.is_initialized.return_value = False
+
+    result = sentry_logger.start_trace("agent.run", "hello")
+    assert result is None
+    assert sentry_logger._root_span is None
+
+    _, err = capsys.readouterr()
+    assert "not initialized" in err
 
 
 def test_sentry_requires_sentry_sdk_package():
