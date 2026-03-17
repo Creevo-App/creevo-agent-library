@@ -36,9 +36,10 @@ class DummyCandidate:
 
 
 class DummyUsageMetadata:
-    def __init__(self, prompt: int, completion: int, total: int):
+    def __init__(self, prompt: int, completion: int, total: int, thoughts: int = 0):
         self.prompt_token_count = prompt
         self.candidates_token_count = completion
+        self.thoughts_token_count = thoughts
         self.total_token_count = total
 
 
@@ -184,6 +185,24 @@ def test_gemini_llm_formats_history_and_extracts_usage():
     tool_blocks = [block for block in message.content if isinstance(block, ToolUseBlock)]
     assert tool_blocks[0].name == "tool"
     assert tool_blocks[0].input == {"x": 1}
+
+
+def test_gemini_llm_includes_thinking_tokens_in_completion():
+    from unittest.mock import patch
+
+    response = DummyResponse(
+        candidates=[
+            DummyCandidate(parts=[DummyPart(text="answer")])
+        ],
+        usage_metadata=DummyUsageMetadata(prompt=100, completion=50, total=200, thoughts=80),
+    )
+    with patch("google.genai.Client"):
+        llm = GeminiLLM(api_key="key", model="model", max_tokens=10)
+    llm.client = FakeClient(response)
+
+    message = llm.generate_content("system", [], tools=None)
+    assert message.usage["completion_tokens"] == 130  # 50 response + 80 thoughts
+    assert message.usage["prompt_tokens"] == 100
 
 
 @pytest.mark.integration

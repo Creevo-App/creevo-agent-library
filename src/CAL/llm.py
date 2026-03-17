@@ -284,9 +284,11 @@ class GeminiLLM(LLM):
         # Extract token usage from response
         usage = {}
         if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            candidates_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0) or 0
+            thoughts_tokens = getattr(response.usage_metadata, 'thoughts_token_count', 0) or 0
             usage = {
                 'prompt_tokens': getattr(response.usage_metadata, 'prompt_token_count', 0) or 0,
-                'completion_tokens': getattr(response.usage_metadata, 'candidates_token_count', 0) or 0,
+                'completion_tokens': candidates_tokens + thoughts_tokens,
                 'total_tokens': getattr(response.usage_metadata, 'total_token_count', 0) or 0,
             }
         
