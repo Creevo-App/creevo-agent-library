@@ -38,7 +38,7 @@ class DummyCandidate:
 class DummyUsageMetadata:
     def __init__(self, prompt: int, completion: int, total: int, thoughts: int = 0):
         self.prompt_token_count = prompt
-        self.response_token_count = completion
+        self.candidates_token_count = completion
         self.thoughts_token_count = thoughts
         self.total_token_count = total
 
