@@ -41,8 +41,8 @@ langsmith = ["langsmith>=0.1.0"]
 mcp = ["mcp>=1.0.0"]
 
 [project.urls]
-Homepage = "https://github.com/Creevo-App/creevo-agent-library"
-Repository = "https://github.com/Creevo-App/creevo-agent-library"
+Homepage = "https://github.com/Creevo-App/creevo-agent-library/tree/owen/cre-580-move-from-maxim-to-sentry"
+Repository = "https://github.com/Creevo-App/creevo-agent-library/tree/owen/cre-580-move-from-maxim-to-sentry"
 Issues = "https://github.com/Creevo-App/creevo-agent-library/issues"
 
 [tool.setuptools]

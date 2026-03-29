@@ -921,14 +921,16 @@ class SentryLogger(Logger):
         self.user_prompt = user_prompt
 
         try:
-            self._root_span = self._sentry_sdk.start_span(
+            # Root must be a Transaction: plain Spans from start_span() are not sent to Sentry
+            # as performance events (see sentry_sdk.scope.Scope.start_span docstring).
+            self._root_span = self._sentry_sdk.start_transaction(
                 op="gen_ai.invoke_agent",
                 name=f"invoke_agent {self.agent_name}",
             )
-            # __enter__ activates this span in the scope so that child spans
+            # __enter__ activates this transaction in the scope so that child spans
             # created via start_span() in log_llm_response / log_tool_response
             # automatically parent under it.  Matched by __exit__ in end_trace
-            # / shutdown which finishes the span AND restores the prior scope.
+            # / shutdown which finishes the transaction AND restores the prior scope.
             self._root_span.__enter__()
             self._root_span.set_data("gen_ai.agent.name", self.agent_name)
             self._root_span.set_data("gen_ai.operation.name", "invoke_agent")

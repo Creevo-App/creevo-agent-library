@@ -330,7 +330,15 @@ def sentry_logger():
         created_spans.append(span)
         return span
 
+    def mock_start_transaction(**kwargs):
+        span = _make_mock_span()
+        span.op = kwargs.get("op", "")
+        span.name = kwargs.get("name", "")
+        created_spans.append(span)
+        return span
+
     mock_sdk.start_span = MagicMock(side_effect=mock_start_span)
+    mock_sdk.start_transaction = MagicMock(side_effect=mock_start_transaction)
     mock_sdk.is_initialized = MagicMock(return_value=True)
 
     with patch.dict("sys.modules", {"sentry_sdk": mock_sdk}):
@@ -347,8 +355,8 @@ def test_sentry_start_and_end_trace(sentry_logger):
     assert sentry_logger._root_span is not None
     assert sentry_logger.user_prompt == "hello world"
 
-    sentry_logger._sentry_sdk.start_span.assert_called_once()
-    call_kwargs = sentry_logger._sentry_sdk.start_span.call_args[1]
+    sentry_logger._sentry_sdk.start_transaction.assert_called_once()
+    call_kwargs = sentry_logger._sentry_sdk.start_transaction.call_args[1]
     assert call_kwargs["op"] == "gen_ai.invoke_agent"
     assert "invoke_agent test-agent" in call_kwargs["name"]
 
