@@ -1,0 +1,13 @@
+version = 1
+agents = ["claude", "cursor"]
+
+[trust]
+allow_all = true
+
+[[skills]]
+name = "dotagents"
+source = "getsentry/dotagents"
+
+[[skills]]
+name = "sentry-setup-ai-monitoring"
+source = "getsentry/sentry-for-ai"

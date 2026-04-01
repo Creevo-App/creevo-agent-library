@@ -71,5 +71,6 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           MAXIM_API_KEY: ${{ secrets.MAXIM_API_KEY }}
           MAXIM_LOG_REPO_ID: ${{ secrets.MAXIM_LOG_REPO_ID }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
           pytest tests/test_integration.py -v -m integration

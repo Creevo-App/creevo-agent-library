@@ -28,6 +28,7 @@ dependencies = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
     "maxim-py>=3.13.1",
+    "sentry-sdk>=2.0.0",
     "python-dotenv>=1.0.0",
     "httpx>=0.27.0",
     "beautifulsoup4>=4.12.0",
@@ -40,8 +41,8 @@ langsmith = ["langsmith>=0.1.0"]
 mcp = ["mcp>=1.0.0"]
 
 [project.urls]
-Homepage = "https://github.com/Creevo-App/creevo-agent-library"
-Repository = "https://github.com/Creevo-App/creevo-agent-library"
+Homepage = "https://github.com/Creevo-App/creevo-agent-library/tree/owen/cre-580-move-from-maxim-to-sentry"
+Repository = "https://github.com/Creevo-App/creevo-agent-library/tree/owen/cre-580-move-from-maxim-to-sentry"
 Issues = "https://github.com/Creevo-App/creevo-agent-library/issues"
 
 [tool.setuptools]
@@ -51,5 +52,5 @@ packages = ["CAL"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = [
-    "integration: tests that require external services (Gemini API, Maxim, LangSmith)",
+    "integration: tests that require external services (Gemini API, Maxim, Sentry, LangSmith)",
 ]

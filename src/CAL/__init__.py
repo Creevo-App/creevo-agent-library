@@ -41,7 +41,7 @@ from .memory_engine import (
     estimate_tool_schema_tokens,
 )
 from .compression import CompressionConfig, CompressionArchiver
-from .logger import Logger, LangSmithLogger, MaximLogger
+from .logger import Logger, LangSmithLogger, MaximLogger, SentryLogger
 from .content_blocks import (
     ContentBlock,
     TextBlock,
@@ -105,6 +105,7 @@ __all__ = [
     'CompressionArchiver',
     'Logger',
     'MaximLogger',
+    'SentryLogger',
     'LangSmithLogger',
 ]
 
